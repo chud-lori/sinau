@@ -22,16 +22,32 @@ type Room struct {
 }
 
 const (
-	NotifChannelOff   = "off"
-	NotifChannelEmail = "email"
-	NotifChannelLog   = "log"
+	NotifChannelOff      = "off"
+	NotifChannelEmail    = "email"
+	NotifChannelLog      = "log"
+	NotifChannelWhatsApp = "whatsapp"
+	NotifChannelTelegram = "telegram"
 )
 
+// ValidNotifChannel reports whether s is a recognised notification channel.
+// Validation lives here (not in a DB CHECK) so adding a channel is a code-
+// only change — no migration required.
+func ValidNotifChannel(s string) bool {
+	switch s {
+	case NotifChannelOff, NotifChannelEmail, NotifChannelLog,
+		NotifChannelWhatsApp, NotifChannelTelegram:
+		return true
+	}
+	return false
+}
+
 type NotificationPrefs struct {
-	UserID    string
-	Enabled   bool
-	Channel   string
-	UpdatedAt string
+	UserID         string
+	Enabled        bool
+	Channel        string
+	WhatsAppNumber string
+	TelegramChatID string
+	UpdatedAt      string
 }
 
 type LeaderboardEntry struct {

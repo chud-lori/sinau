@@ -141,7 +141,7 @@ func (s *Store) Migrate() error {
 	}); err != nil {
 		return err
 	}
-	return s.applyMigration(3, []string{
+	if err := s.applyMigration(3, []string{
 		`CREATE TABLE IF NOT EXISTS notification_prefs (
 			user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
 			enabled INTEGER NOT NULL DEFAULT 0,
@@ -165,7 +165,58 @@ func (s *Store) Migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_points_ledger_user ON points_ledger(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_points_ledger_room_user ON points_ledger(room_id, user_id)`,
-	})
+	}); err != nil {
+		return err
+	}
+	// Migration 4 rebuilds notification_prefs to (a) drop the hard-coded
+	// channel CHECK so adding new channels is a code-only change, and
+	// (b) add WhatsApp and Telegram contact fields. PRAGMA foreign_keys
+	// can't be toggled inside a transaction, so this needs its own runner.
+	return s.applyMigration4()
+}
+
+func (s *Store) applyMigration4() error {
+	const version = 4
+	var exists int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 1 {
+		return nil
+	}
+	if _, err := s.db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	// Restore FKs no matter how we exit.
+	defer func() { _, _ = s.db.Exec(`PRAGMA foreign_keys = ON`) }()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmts := []string{
+		`CREATE TABLE notification_prefs_new (
+			user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			enabled INTEGER NOT NULL DEFAULT 0,
+			channel TEXT NOT NULL DEFAULT 'off',
+			whatsapp_number TEXT NOT NULL DEFAULT '',
+			telegram_chat_id TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL
+		)`,
+		`INSERT INTO notification_prefs_new(user_id, enabled, channel, updated_at)
+			SELECT user_id, enabled, channel, updated_at FROM notification_prefs`,
+		`DROP TABLE notification_prefs`,
+		`ALTER TABLE notification_prefs_new RENAME TO notification_prefs`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("migration %d: %w", version, err)
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`, version, auth.Now()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) applyMigration(version int, stmts []string) error {
@@ -971,8 +1022,9 @@ func (s *Store) NotificationPrefsFor(userID string) domain.NotificationPrefs {
 		Channel: domain.NotifChannelOff,
 	}
 	var enabled int
-	err := s.db.QueryRow(`SELECT enabled, channel, updated_at FROM notification_prefs WHERE user_id = ?`, userID).
-		Scan(&enabled, &prefs.Channel, &prefs.UpdatedAt)
+	err := s.db.QueryRow(`SELECT enabled, channel, whatsapp_number, telegram_chat_id, updated_at
+		FROM notification_prefs WHERE user_id = ?`, userID).
+		Scan(&enabled, &prefs.Channel, &prefs.WhatsAppNumber, &prefs.TelegramChatID, &prefs.UpdatedAt)
 	if err != nil {
 		return prefs
 	}
@@ -980,17 +1032,23 @@ func (s *Store) NotificationPrefsFor(userID string) domain.NotificationPrefs {
 	return prefs
 }
 
-// SetNotificationPrefs upserts the user's preferences. Caller is expected to
-// validate channel is one of the allowed values.
-func (s *Store) SetNotificationPrefs(userID string, enabled bool, channel string) error {
+// SetNotificationPrefs upserts the user's preferences. The caller is
+// expected to validate channel via domain.ValidNotifChannel and normalise
+// contact fields. UserID on the struct identifies the row.
+func (s *Store) SetNotificationPrefs(prefs domain.NotificationPrefs) error {
 	e := 0
-	if enabled {
+	if prefs.Enabled {
 		e = 1
 	}
-	_, err := s.db.Exec(`INSERT INTO notification_prefs(user_id, enabled, channel, updated_at)
-		VALUES(?,?,?,?)
-		ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled, channel=excluded.channel, updated_at=excluded.updated_at`,
-		userID, e, channel, auth.Now())
+	_, err := s.db.Exec(`INSERT INTO notification_prefs(user_id, enabled, channel, whatsapp_number, telegram_chat_id, updated_at)
+		VALUES(?,?,?,?,?,?)
+		ON CONFLICT(user_id) DO UPDATE SET
+			enabled=excluded.enabled,
+			channel=excluded.channel,
+			whatsapp_number=excluded.whatsapp_number,
+			telegram_chat_id=excluded.telegram_chat_id,
+			updated_at=excluded.updated_at`,
+		prefs.UserID, e, prefs.Channel, prefs.WhatsAppNumber, prefs.TelegramChatID, auth.Now())
 	return err
 }
 

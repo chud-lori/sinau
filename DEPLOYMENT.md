@@ -287,27 +287,46 @@ SINAU_SMTP_USER=sinau@example.com
 SINAU_SMTP_PASS=app-specific-password
 SINAU_SMTP_FROM=sinau@example.com
 SINAU_SMTP_STARTTLS=true
+# Optional, channel stubs. Leaving these empty keeps the channels selectable
+# in /settings but routes them to the server log instead of attempting
+# delivery.
+SINAU_WHATSAPP_API_URL=http://127.0.0.1:3000
+SINAU_WHATSAPP_API_KEY=replace-me
+SINAU_TELEGRAM_BOT_TOKEN=replace-me
 ```
 
-The reminder worker dispatches one notification per due task per recipient,
-based on each user's preference at `/settings`. Channels currently
-implemented: `off`, `email` (SMTP), and `log` (server log; useful for dev /
-admin debugging). Recipients with no row default to `off`, so nobody is
-spammed without opting in.
+The reminder worker dispatches one notification per due task per recipient
+based on each user's preference at `/settings`. Recipients with no row
+default to `off`, so nobody is pinged without opting in.
 
-To plug a new channel (e.g. WhatsApp via the
-`aldinokemal/go-whatsapp-web-multidevice` REST daemon, Telegram, or
-Discord):
+Channels:
 
-1. Add a `reminder.Notifier` implementation in `internal/reminder/`.
-2. Register it under a new key in
-   `cmd/sinau/main.go:buildNotifiers`.
-3. Add the new value to the CHECK constraint on
-   `notification_prefs.channel` in `internal/store/store.go:Migrate` (new
-   migration) and to the `/settings` form.
+- `off` — no notifications.
+- `email` — SMTP via the `SINAU_SMTP_*` env vars.
+- `whatsapp` — **preview**. Interface and DI plumbing complete; the actual
+  HTTP call to a WhatsApp gateway (e.g.
+  `aldinokemal/go-whatsapp-web-multidevice`) is a TODO in
+  `internal/reminder/whatsapp.go:NotifyTaskDue`. Until filled in, this
+  channel falls back to log.
+- `telegram` — **preview**. Same shape as WhatsApp; TODO in
+  `internal/reminder/telegram.go:NotifyTaskDue` to call the Bot API. Falls
+  back to log until wired.
+- `log` — server log; useful for development and admin debugging.
 
-The deadline scan, `last_reminded_at` dedup, and task storage do not
-change.
+To finish wiring a preview channel (or plug a new one entirely):
+
+1. Implement / fill in `reminder.Notifier.NotifyTaskDue` for that
+   channel. The stubs already declare config structs, fallback wiring, a
+   `Configured()` check, and the right log lines.
+2. Register the notifier in `cmd/sinau/main.go:buildNotifiers` (already
+   done for `whatsapp` and `telegram` stubs).
+3. Add a new constant in `internal/domain` and let it through
+   `domain.ValidNotifChannel`.
+4. Add the option to the `/settings` form in `templates/app.html`.
+
+No migration is required to add channels — `notification_prefs.channel`
+is validated in application code (`domain.ValidNotifChannel`) rather than
+a CHECK constraint, intentionally.
 
 Disable reminders:
 

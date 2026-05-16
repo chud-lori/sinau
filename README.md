@@ -36,12 +36,23 @@ Environment:
   envelope.
 - `SINAU_SMTP_STARTTLS`, default `true`. Set `false` for plaintext local
   relays.
+- `SINAU_WHATSAPP_API_URL`, `SINAU_WHATSAPP_API_KEY` — gateway URL + key
+  for the WhatsApp stub. Empty keeps the channel selectable but routes to
+  log (no delivery). Designed for an external daemon like
+  `aldinokemal/go-whatsapp-web-multidevice`.
+- `SINAU_TELEGRAM_BOT_TOKEN`, `SINAU_TELEGRAM_API_BASE` — Bot API
+  credentials for the Telegram stub. Empty token keeps the channel
+  selectable but routes to log.
 
-Users opt in to reminders themselves at `/settings`. The current channels
-are `off` / `email` / `log`. To wire a new channel (e.g. WhatsApp via the
-`go-whatsapp-web-multidevice` REST daemon), add a `reminder.Notifier`
-implementation and register it in `cmd/sinau/main.go:buildNotifiers`. The
-worker dispatches per-user based on `notification_prefs.channel`.
+Users opt in to reminders themselves at `/settings`. Available channels:
+`off`, `email`, `whatsapp` (preview), `telegram` (preview), `log`. WhatsApp
+and Telegram have the full interface and DI plumbing in place
+(`internal/reminder/whatsapp.go`, `internal/reminder/telegram.go`,
+contact-info fields on `notification_prefs`, `Recipient.WhatsApp` /
+`Recipient.Telegram`); only the actual HTTP call to the delivery backend
+is left as a TODO. To finish wiring a channel, fill in `NotifyTaskDue` in
+the stub file — no changes to the worker, store, web layer, or migration
+are required.
 
 Deployment notes are in [DEPLOYMENT.md](DEPLOYMENT.md).
 

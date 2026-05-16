@@ -422,12 +422,47 @@ func TestNotificationPrefsDefaultOff(t *testing.T) {
 	if prefs.Enabled || prefs.Channel != domain.NotifChannelOff {
 		t.Fatalf("default prefs not off: %+v", prefs)
 	}
-	if err := st.SetNotificationPrefs(mentorID, true, domain.NotifChannelEmail); err != nil {
+	if err := st.SetNotificationPrefs(domain.NotificationPrefs{
+		UserID: mentorID, Enabled: true, Channel: domain.NotifChannelEmail,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	prefs = st.NotificationPrefsFor(mentorID)
 	if !prefs.Enabled || prefs.Channel != domain.NotifChannelEmail {
 		t.Fatalf("prefs not persisted: %+v", prefs)
+	}
+}
+
+func TestNotificationPrefsPersistContactFields(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, _ := createUserRoom(t, st, "Mentor", "mentor@example.com")
+	in := domain.NotificationPrefs{
+		UserID:         mentorID,
+		Enabled:        true,
+		Channel:        domain.NotifChannelWhatsApp,
+		WhatsAppNumber: "+6281234567890",
+		TelegramChatID: "12345",
+	}
+	if err := st.SetNotificationPrefs(in); err != nil {
+		t.Fatal(err)
+	}
+	got := st.NotificationPrefsFor(mentorID)
+	if got.Channel != domain.NotifChannelWhatsApp || got.WhatsAppNumber != in.WhatsAppNumber || got.TelegramChatID != in.TelegramChatID {
+		t.Fatalf("contact fields not roundtripped: %+v", got)
+	}
+}
+
+func TestValidNotifChannel(t *testing.T) {
+	for _, c := range []string{
+		domain.NotifChannelOff, domain.NotifChannelEmail, domain.NotifChannelLog,
+		domain.NotifChannelWhatsApp, domain.NotifChannelTelegram,
+	} {
+		if !domain.ValidNotifChannel(c) {
+			t.Fatalf("channel %q should be valid", c)
+		}
+	}
+	if domain.ValidNotifChannel("sms") {
+		t.Fatal("sms unexpectedly valid")
 	}
 }
 

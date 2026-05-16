@@ -34,12 +34,19 @@ import (
 // Recipient identifies who a notification is being sent to and how.
 // Channel is one of domain.NotifChannel* and must match a key in the
 // Worker's notifier registry, otherwise the message is dropped (logged).
+//
+// The channel-specific contact fields (Email, WhatsApp, Telegram) are
+// populated from the user's notification_prefs row at dispatch time. New
+// channels add a new field here and a new Notifier implementation; the
+// worker, store, and web layers stay untouched.
 type Recipient struct {
-	UserID  string
-	Name    string
-	Email   string
-	Channel string
-	Role    string // "mentor" or "learner" — used by templates / future filters.
+	UserID   string
+	Name     string
+	Channel  string
+	Role     string // "mentor" or "learner" — useful for future filters / templates.
+	Email    string
+	WhatsApp string // E.164 phone number, e.g. "+6281234567890".
+	Telegram string // Telegram chat ID (numeric string; channels use negative IDs).
 }
 
 // Notifier delivers one task-due notification to one recipient via the
@@ -130,11 +137,13 @@ func (w *Worker) dispatch(ctx context.Context, rem domain.TaskReminder) {
 		return
 	}
 	to := Recipient{
-		UserID:  rem.AssigneeID,
-		Name:    rem.AssigneeName,
-		Email:   rem.AssigneeEmail,
-		Channel: prefs.Channel,
-		Role:    domain.RoleLearner,
+		UserID:   rem.AssigneeID,
+		Name:     rem.AssigneeName,
+		Channel:  prefs.Channel,
+		Role:     domain.RoleLearner,
+		Email:    rem.AssigneeEmail,
+		WhatsApp: prefs.WhatsAppNumber,
+		Telegram: prefs.TelegramChatID,
 	}
 	if err := notifier.NotifyTaskDue(ctx, to, rem); err != nil {
 		log.Printf("reminder send failed channel=%s task=%s user=%s: %v",

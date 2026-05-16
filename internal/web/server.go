@@ -16,19 +16,21 @@ import (
 )
 
 type Server struct {
-	store        *store.Store
-	tpl          *template.Template
-	secureCookie bool
-	staticDir    string
-	dummyHash    string
-	authLimiter  *limiter
+	store                *store.Store
+	tpl                  *template.Template
+	secureCookie         bool
+	staticDir            string
+	dummyHash            string
+	authLimiter          *limiter
+	notificationsEnabled bool
 }
 
 type Config struct {
-	Store        *store.Store
-	Templates    string
-	StaticDir    string
-	SecureCookie bool
+	Store                *store.Store
+	Templates            string
+	StaticDir            string
+	SecureCookie         bool
+	NotificationsEnabled bool
 }
 
 type ctxKey string
@@ -36,13 +38,14 @@ type ctxKey string
 const userKey ctxKey = "user"
 
 type PageData struct {
-	Title        string
-	User         *domain.User
-	CSRF         string
-	Error        string
-	Notice       string
-	SetupNeeded  bool
-	UserPoints   int
+	Title                string
+	User                 *domain.User
+	CSRF                 string
+	Error                string
+	Notice               string
+	SetupNeeded          bool
+	NotificationsEnabled bool
+	UserPoints           int
 	Rooms        []domain.Room
 	Room         domain.Room
 	Members      []domain.Member
@@ -73,12 +76,13 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	return &Server{
-		store:        cfg.Store,
-		tpl:          tpl,
-		secureCookie: cfg.SecureCookie,
-		staticDir:    cfg.StaticDir,
-		dummyHash:    dummy,
-		authLimiter:  newLimiter(0.2, 8),
+		store:                cfg.Store,
+		tpl:                  tpl,
+		secureCookie:         cfg.SecureCookie,
+		staticDir:            cfg.StaticDir,
+		dummyHash:            dummy,
+		authLimiter:          newLimiter(0.2, 8),
+		notificationsEnabled: cfg.NotificationsEnabled,
 	}, nil
 }
 
@@ -103,8 +107,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/status", s.auth(s.updateTask))
 	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/review", s.auth(s.reviewTask))
 	mux.HandleFunc("POST /rooms/{roomID}/settings", s.auth(s.updateRoomSettings))
-	mux.HandleFunc("GET /settings", s.auth(s.settingsPage))
-	mux.HandleFunc("POST /settings", s.auth(s.updateSettings))
+	if s.notificationsEnabled {
+		mux.HandleFunc("GET /settings", s.auth(s.settingsPage))
+		mux.HandleFunc("POST /settings", s.auth(s.updateSettings))
+	}
 	mux.HandleFunc("GET /help", s.withUser(s.helpPage))
 	return securityHeaders(mux)
 }
@@ -189,7 +195,7 @@ func (s *Server) rateLimit(next http.HandlerFunc) http.HandlerFunc {
 // fields.
 func (s *Server) pageData(r *http.Request, title string) PageData {
 	u := current(r)
-	pd := PageData{Title: title}
+	pd := PageData{Title: title, NotificationsEnabled: s.notificationsEnabled}
 	if u != nil {
 		pd.User = u
 		pd.CSRF = s.csrfFor(r)
@@ -623,6 +629,10 @@ func (s *Server) updateRoomSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
+	if !s.notificationsEnabled {
+		http.NotFound(w, r)
+		return
+	}
 	u := current(r)
 	pd := s.pageData(r, "Settings")
 	pd.Prefs = s.store.NotificationPrefsFor(u.ID)
@@ -633,13 +643,14 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
+	if !s.notificationsEnabled {
+		http.NotFound(w, r)
+		return
+	}
 	u := current(r)
 	enabled := r.FormValue("enabled") == "on" || r.FormValue("enabled") == "1"
 	channel := r.FormValue("channel")
-	switch channel {
-	case domain.NotifChannelOff, domain.NotifChannelEmail, domain.NotifChannelLog:
-		// allowed
-	default:
+	if !domain.ValidNotifChannel(channel) {
 		http.Error(w, "invalid channel", http.StatusBadRequest)
 		return
 	}
@@ -647,7 +658,14 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 		// Off-switch normalises channel for consistency.
 		channel = domain.NotifChannelOff
 	}
-	if err := s.store.SetNotificationPrefs(u.ID, enabled, channel); err != nil {
+	prefs := domain.NotificationPrefs{
+		UserID:         u.ID,
+		Enabled:        enabled,
+		Channel:        channel,
+		WhatsAppNumber: auth.Clean(r.FormValue("whatsapp_number"), 32),
+		TelegramChatID: auth.Clean(r.FormValue("telegram_chat_id"), 32),
+	}
+	if err := s.store.SetNotificationPrefs(prefs); err != nil {
 		s.serverError(w, err)
 		return
 	}

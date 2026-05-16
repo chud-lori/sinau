@@ -17,7 +17,7 @@
   <nav>
     <span class="user-chip">{{.User.Name}}</span>
     {{if gt .UserPoints 0}}<span class="pill point-chip" title="lifetime points">{{.UserPoints}} pts</span>{{end}}
-    <a href="/settings">Settings</a>
+    {{if .NotificationsEnabled}}<a href="/settings">Settings</a>{{end}}
     <a href="/help">Help</a>
     <form method="post" action="/logout">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
@@ -650,10 +650,18 @@
       <select name="channel">
         <option value="off" {{if eq .Prefs.Channel "off"}}selected{{end}}>Off</option>
         <option value="email" {{if eq .Prefs.Channel "email"}}selected{{end}}>Email — {{.User.Email}}</option>
+        <option value="whatsapp" {{if eq .Prefs.Channel "whatsapp"}}selected{{end}}>WhatsApp (preview)</option>
+        <option value="telegram" {{if eq .Prefs.Channel "telegram"}}selected{{end}}>Telegram (preview)</option>
         <option value="log" {{if eq .Prefs.Channel "log"}}selected{{end}}>Log only (dev / admin debugging)</option>
       </select>
     </label>
-    <p class="muted">Reminders go out at most once per task per day. Mentors get notifications for tasks they have assigned; learners get them for tasks assigned to them. If the channel is not yet configured by the operator (e.g. no SMTP server), email reminders quietly fall back to the server log.</p>
+    <label>WhatsApp number
+      <input name="whatsapp_number" type="text" value="{{.Prefs.WhatsAppNumber}}" placeholder="+6281234567890" maxlength="32">
+    </label>
+    <label>Telegram chat ID
+      <input name="telegram_chat_id" type="text" value="{{.Prefs.TelegramChatID}}" placeholder="123456789" maxlength="32">
+    </label>
+    <p class="muted">Reminders go out at most once per task per day. Mentors get notifications for tasks they have assigned; learners get them for tasks assigned to them. If the chosen channel is not yet wired by the operator (no SMTP server, no WhatsApp gateway, no Telegram bot), reminders quietly fall back to the server log instead of failing. WhatsApp and Telegram are listed as <em>preview</em>: the routing is in place but the actual delivery integration is not yet enabled.</p>
     <button type="submit">Save settings</button>
   </form>
 </section>
@@ -694,10 +702,12 @@
   </ol>
 </section>
 
+{{if .NotificationsEnabled}}
 <section class="panel help-section">
   <div class="section-head"><div><p class="eyebrow">Stay in the loop</p><h2>Notifications</h2></div></div>
   <p>Reminders are off by default. Open <a href="/settings">Settings</a> after logging in to enable deadline reminders and pick a channel (email is the standard option). Both mentors and learners can opt in — only the ones who turn it on get pinged. Reminders fire at most once per task per day.</p>
 </section>
+{{end}}
 
 <section class="panel help-section">
   <div class="section-head"><div><p class="eyebrow">Why points</p><h2>Gamification, fairly</h2></div></div>

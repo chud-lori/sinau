@@ -19,14 +19,56 @@ func newTestServer(t *testing.T) *Server {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	srv, err := New(Config{
-		Store:     st,
-		Templates: "../../templates",
-		StaticDir: "../../static",
+		Store:                st,
+		Templates:            "../../templates",
+		StaticDir:            "../../static",
+		NotificationsEnabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return srv
+}
+
+func TestNotificationsDisabledHidesEverything(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "sinau.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	srv, err := New(Config{
+		Store:                st,
+		Templates:            "../../templates",
+		StaticDir:            "../../static",
+		NotificationsEnabled: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := srv.Handler()
+
+	// /settings 404s when the flag is off.
+	settingsReq := httptest.NewRequest(http.MethodGet, "/settings", nil)
+	settingsRR := httptest.NewRecorder()
+	handler.ServeHTTP(settingsRR, settingsReq)
+	if settingsRR.Code != http.StatusNotFound {
+		t.Fatalf("/settings expected 404 when disabled, got %d", settingsRR.Code)
+	}
+
+	// /help is reachable but must not contain the Notifications section.
+	helpReq := httptest.NewRequest(http.MethodGet, "/help", nil)
+	helpRR := httptest.NewRecorder()
+	handler.ServeHTTP(helpRR, helpReq)
+	if helpRR.Code != http.StatusOK {
+		t.Fatalf("/help expected 200, got %d", helpRR.Code)
+	}
+	body := helpRR.Body.String()
+	if strings.Contains(body, ">Notifications<") {
+		t.Fatal("help page should not show Notifications section when disabled")
+	}
+	if strings.Contains(body, `href="/settings"`) {
+		t.Fatal("help page must not link to /settings when notifications are disabled")
+	}
 }
 
 func TestSecurityHeaders(t *testing.T) {
