@@ -82,6 +82,9 @@ SINAU_DB=/var/lib/sinau/sinau.db
 SINAU_TEMPLATES=/opt/sinau/templates
 SINAU_STATIC=/opt/sinau/static
 SINAU_SECURE_COOKIE=true
+SINAU_REMINDERS=true
+SINAU_REMINDER_INTERVAL=1h
+SINAU_REMINDER_WINDOW=24h
 ```
 
 Lock it down:
@@ -255,3 +258,29 @@ curl -I https://sinau.example.com
 - Keep registration invite-only.
 - Back up `/var/lib/sinau/sinau.db`.
 - Do not put the database inside the git repository or release directory.
+
+## Deadline Reminders
+
+Sinau includes a lightweight in-process reminder worker. It checks open tasks with deadlines inside the reminder window and logs one reminder per task per day.
+
+Current delivery:
+
+```txt
+delivery=log
+```
+
+This is intentional. Email, WhatsApp, Telegram, or Discord can be added behind the notifier interface without changing task storage or deadline logic.
+
+Controls:
+
+```sh
+SINAU_REMINDERS=true
+SINAU_REMINDER_INTERVAL=1h
+SINAU_REMINDER_WINDOW=24h
+```
+
+Disable reminders:
+
+```sh
+SINAU_REMINDERS=false
+```

@@ -57,7 +57,7 @@ func (s *Store) Migrate() error {
 			return err
 		}
 	}
-	return s.applyMigration(1, []string{
+	if err := s.applyMigration(1, []string{
 		`CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -127,6 +127,13 @@ func (s *Store) Migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_comments_report_created ON comments(report_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_room_status ON tasks(room_id, status)`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_room_assignee ON tasks(room_id, assigned_to, status)`,
+	}); err != nil {
+		return err
+	}
+	return s.applyMigration(2, []string{
+		`ALTER TABLE tasks ADD COLUMN due_date TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tasks ADD COLUMN last_reminded_at TEXT NOT NULL DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date, status)`,
 	})
 }
 
@@ -368,6 +375,12 @@ func (s *Store) RoomData(roomID, userID, role string) (domain.RoomData, error) {
 		if t.Status != "done" {
 			st.OpenTasks++
 		}
+		if t.DueState == "due-soon" {
+			st.DueSoonTasks++
+		}
+		if t.DueState == "overdue" {
+			st.OverdueTasks++
+		}
 	}
 	return domain.RoomData{Members: members, Reports: reports, Tasks: tasks, Invites: invites, Stats: st}, nil
 }
@@ -471,7 +484,7 @@ func (s *Store) CreateComment(reportID, userID, body string) error {
 }
 
 func (s *Store) Tasks(roomID, userID, role string) ([]domain.Task, error) {
-	query := `SELECT t.id, t.title, t.detail, t.status, u.name, t.created_at
+	query := `SELECT t.id, t.title, t.detail, t.status, u.name, t.due_date, t.created_at
 		FROM tasks t JOIN users u ON u.id = t.assigned_to
 		WHERE t.room_id = ?`
 	args := []any{roomID}
@@ -479,7 +492,7 @@ func (s *Store) Tasks(roomID, userID, role string) ([]domain.Task, error) {
 		query += ` AND t.assigned_to = ?`
 		args = append(args, userID)
 	}
-	query += ` ORDER BY CASE t.status WHEN 'todo' THEN 0 WHEN 'doing' THEN 1 ELSE 2 END, t.created_at DESC`
+	query += ` ORDER BY CASE WHEN t.status != 'done' AND t.due_date != '' AND t.due_date < date('now') THEN 0 WHEN t.status != 'done' AND t.due_date != '' THEN 1 WHEN t.status = 'todo' THEN 2 WHEN t.status = 'doing' THEN 3 ELSE 4 END, t.due_date ASC, t.created_at DESC`
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -488,22 +501,23 @@ func (s *Store) Tasks(roomID, userID, role string) ([]domain.Task, error) {
 	var out []domain.Task
 	for rows.Next() {
 		var t domain.Task
-		if err := rows.Scan(&t.ID, &t.Title, &t.Detail, &t.Status, &t.Assignee, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Title, &t.Detail, &t.Status, &t.Assignee, &t.DueDate, &t.CreatedAt); err != nil {
 			return nil, err
 		}
+		t.DueState = dueState(t.DueDate, t.Status, time.Now().UTC())
 		out = append(out, t)
 	}
 	return out, rows.Err()
 }
 
-func (s *Store) CreateTask(roomID, assignedTo, assignedBy, title, detail string) error {
+func (s *Store) CreateTask(roomID, assignedTo, assignedBy, title, detail, dueDate string) error {
 	id, err := auth.NewID()
 	if err != nil {
 		return err
 	}
 	n := auth.Now()
-	_, err = s.db.Exec(`INSERT INTO tasks(id,room_id,assigned_to,assigned_by,title,detail,status,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?)`, id, roomID, assignedTo, assignedBy, title, detail, "todo", n, n)
+	_, err = s.db.Exec(`INSERT INTO tasks(id,room_id,assigned_to,assigned_by,title,detail,status,due_date,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?)`, id, roomID, assignedTo, assignedBy, title, detail, "todo", dueDate, n, n)
 	return err
 }
 
@@ -532,4 +546,54 @@ func (s *Store) Invites(roomID string) ([]domain.Invite, error) {
 		out = append(out, inv)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) DueTaskReminders(now time.Time, window time.Duration) ([]domain.TaskReminder, error) {
+	start := now.UTC().Format("2006-01-02")
+	end := now.UTC().Add(window).Format("2006-01-02")
+	rows, err := s.db.Query(`SELECT t.id, t.title, t.detail, t.due_date, r.id, r.name, u.id, u.name, u.email
+		FROM tasks t
+		JOIN rooms r ON r.id = t.room_id
+		JOIN users u ON u.id = t.assigned_to
+		WHERE t.status != 'done'
+		  AND t.due_date != ''
+		  AND t.due_date <= ?
+		  AND (t.last_reminded_at = '' OR t.last_reminded_at < ?)
+		ORDER BY t.due_date ASC`, end, start)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.TaskReminder
+	for rows.Next() {
+		var rem domain.TaskReminder
+		if err := rows.Scan(&rem.TaskID, &rem.Title, &rem.Detail, &rem.DueDate, &rem.RoomID, &rem.RoomName, &rem.AssigneeID, &rem.AssigneeName, &rem.AssigneeEmail); err != nil {
+			return nil, err
+		}
+		out = append(out, rem)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) MarkTaskReminded(taskID string, at time.Time) error {
+	_, err := s.db.Exec(`UPDATE tasks SET last_reminded_at = ? WHERE id = ?`, at.UTC().Format(time.RFC3339), taskID)
+	return err
+}
+
+func dueState(dueDate, status string, now time.Time) string {
+	if dueDate == "" || status == "done" {
+		return ""
+	}
+	due, err := time.Parse("2006-01-02", dueDate)
+	if err != nil {
+		return ""
+	}
+	today, _ := time.Parse("2006-01-02", now.UTC().Format("2006-01-02"))
+	if due.Before(today) {
+		return "overdue"
+	}
+	if !due.After(today.Add(48 * time.Hour)) {
+		return "due-soon"
+	}
+	return ""
 }

@@ -419,11 +419,18 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	title := auth.Clean(r.FormValue("title"), 180)
 	detail := auth.Clean(r.FormValue("detail"), 1200)
+	dueDate := auth.Clean(r.FormValue("due_date"), 10)
 	if title == "" {
 		http.Error(w, "task title required", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.CreateTask(roomID, assignedTo, u.ID, title, detail); err != nil {
+	if dueDate != "" {
+		if _, err := time.Parse("2006-01-02", dueDate); err != nil {
+			http.Error(w, "due date must use YYYY-MM-DD", http.StatusBadRequest)
+			return
+		}
+	}
+	if err := s.store.CreateTask(roomID, assignedTo, u.ID, title, detail, dueDate); err != nil {
 		s.serverError(w, err)
 		return
 	}

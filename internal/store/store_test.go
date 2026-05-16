@@ -144,7 +144,7 @@ func TestTaskUpdateAuthorization(t *testing.T) {
 	learnerA, _ := joinLearner(t, st, codeA, "Learner A", "a@example.com")
 	learnerB, _ := joinLearner(t, st, codeB, "Learner B", "b@example.com")
 
-	if err := st.CreateTask(roomID, learnerA, mentorID, "Read", "Read docs"); err != nil {
+	if err := st.CreateTask(roomID, learnerA, mentorID, "Read", "Read docs", ""); err != nil {
 		t.Fatal(err)
 	}
 	tasks, err := st.Tasks(roomID, learnerA, domain.RoleLearner)
@@ -182,7 +182,7 @@ func TestMemberOpenTaskCountDoesNotMultiplyByReports(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := st.CreateTask(roomID, learnerID, mentorID, "One task", "detail"); err != nil {
+	if err := st.CreateTask(roomID, learnerID, mentorID, "One task", "detail", ""); err != nil {
 		t.Fatal(err)
 	}
 	members, err := st.Members(roomID)
@@ -193,5 +193,43 @@ func TestMemberOpenTaskCountDoesNotMultiplyByReports(t *testing.T) {
 		if m.UserID == learnerID && m.OpenTasks != 1 {
 			t.Fatalf("expected one open task, got %d", m.OpenTasks)
 		}
+	}
+}
+
+func TestTaskDueDateAndReminders(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
+	code := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
+	learnerID, _ := joinLearner(t, st, code, "Learner", "learner@example.com")
+
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	dueSoon := now.Add(24 * time.Hour).Format("2006-01-02")
+	if err := st.CreateTask(roomID, learnerID, mentorID, "Due soon", "detail", dueSoon); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := st.Tasks(roomID, learnerID, domain.RoleLearner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].DueDate != dueSoon {
+		t.Fatalf("due date not stored: %+v", tasks)
+	}
+
+	rems, err := st.DueTaskReminders(now, 48*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rems) != 1 || rems[0].Title != "Due soon" {
+		t.Fatalf("expected one reminder, got %+v", rems)
+	}
+	if err := st.MarkTaskReminded(rems[0].TaskID, now); err != nil {
+		t.Fatal(err)
+	}
+	rems, err = st.DueTaskReminders(now, 48*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rems) != 0 {
+		t.Fatalf("reminder repeated same day: %+v", rems)
 	}
 }

@@ -27,6 +27,9 @@ Environment:
 - `SINAU_TEMPLATES`, default `templates`
 - `SINAU_STATIC`, default `static`
 - `SINAU_SECURE_COOKIE`, set `true` behind HTTPS
+- `SINAU_REMINDERS`, set `false` to disable deadline reminder worker
+- `SINAU_REMINDER_INTERVAL`, default `1h`
+- `SINAU_REMINDER_WINDOW`, default `24h`
 
 Deployment notes are in [DEPLOYMENT.md](DEPLOYMENT.md).
 

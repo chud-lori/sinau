@@ -57,6 +57,8 @@ type Task struct {
 	Detail    string
 	Status    string
 	Assignee  string
+	DueDate   string
+	DueState  string
 	CreatedAt string
 }
 
@@ -72,6 +74,20 @@ type Stats struct {
 	WaitingReports   int
 	InactiveLearners int
 	OpenTasks        int
+	DueSoonTasks     int
+	OverdueTasks     int
+}
+
+type TaskReminder struct {
+	TaskID        string
+	Title         string
+	Detail        string
+	DueDate       string
+	RoomID        string
+	RoomName      string
+	AssigneeID    string
+	AssigneeName  string
+	AssigneeEmail string
 }
 
 type RoomData struct {

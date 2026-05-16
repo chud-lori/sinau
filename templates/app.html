@@ -48,6 +48,9 @@
       <a class="button secondary" href="/join">Join as learner</a>
     </div>
   </div>
+  <div class="landing-visual">
+    <img src="/static/img/landing-hero.png" alt="Sinau mentor dashboard on a laptop">
+  </div>
   <div class="landing-dashboard" aria-hidden="true">
     <div class="mock-top">
       <span></span><span></span><span></span>
@@ -168,26 +171,41 @@
 {{template "layout_end" .}}{{end}}
 
 {{define "room"}}{{template "layout_start" .}}
-<div class="room-hero">
+<div class="dashboard-hero">
   <div>
-    <a class="back-link" href="/">Rooms</a>
+    <a class="back-link" href="/">All rooms</a>
     <h1>{{.Room.Name}}</h1>
     <p class="muted">{{if eq .Room.Role "mentor"}}Review reports, unblock learners, and assign the next concrete task.{{else}}Submit progress, track assigned tasks, and keep mentor feedback in one place.{{end}}</p>
   </div>
-  <span class="pill">{{.Room.Role}}</span>
+  <div class="hero-actions">
+    <span class="pill role-pill">{{.Room.Role}}</span>
+    {{if eq .Room.Role "mentor"}}<a class="button secondary" href="#invite">Invite people</a>{{end}}
+  </div>
 </div>
 
 {{if eq .Room.Role "mentor"}}
 <section class="stats">
-  <div><strong>{{.Stats.BlockedReports}}</strong><span>blocked reports</span></div>
-  <div><strong>{{.Stats.WaitingReports}}</strong><span>waiting feedback</span></div>
-  <div><strong>{{.Stats.InactiveLearners}}</strong><span>not checked in</span></div>
-  <div><strong>{{.Stats.OpenTasks}}</strong><span>open tasks</span></div>
+  <div class="stat-card danger"><span>Blocked reports</span><strong>{{.Stats.BlockedReports}}</strong></div>
+  <div class="stat-card warn"><span>Waiting feedback</span><strong>{{.Stats.WaitingReports}}</strong></div>
+  <div class="stat-card neutral"><span>Not checked in</span><strong>{{.Stats.InactiveLearners}}</strong></div>
+  <div class="stat-card good"><span>Open tasks</span><strong>{{.Stats.OpenTasks}}</strong></div>
+</section>
+
+<section class="priority-panel">
+  <div>
+    <p class="eyebrow">Mentor queue</p>
+    <h2>Start with the highest leverage work</h2>
+  </div>
+  <div class="priority-grid">
+    <a href="#reports"><strong>{{.Stats.BlockedReports}}</strong><span>blockers to inspect</span></a>
+    <a href="#reports"><strong>{{.Stats.WaitingReports}}</strong><span>reports to review</span></a>
+    <a href="#tasks"><strong>{{.Stats.OverdueTasks}}</strong><span>overdue tasks</span></a>
+  </div>
 </section>
 {{end}}
 
-<div class="workspace-layout">
-  <section class="panel primary-panel">
+<div class="dashboard-grid">
+  <section class="panel primary-panel checkin-panel">
     <div class="section-head">
       <div>
         <p class="eyebrow">Check-in</p>
@@ -205,7 +223,7 @@
     </form>
   </section>
 
-  <section class="panel">
+  <section class="panel task-panel" id="tasks">
     <div class="section-head">
       <div>
         <p class="eyebrow">Next actions</p>
@@ -213,13 +231,14 @@
       </div>
     </div>
     {{range .Tasks}}
-      <article class="task-card">
+      <article class="task-card status-border-{{.Status}}">
         <div class="item-head">
           <strong>{{.Title}}</strong>
           <span class="status {{.Status}}">{{.Status}}</span>
         </div>
         {{if .Detail}}<p>{{.Detail}}</p>{{end}}
         <p class="muted">Assigned to {{.Assignee}}</p>
+        {{if .DueDate}}<p><span class="due-chip {{.DueState}}">Due {{.DueDate}}</span></p>{{end}}
         <form class="task-update" method="post" action="/rooms/{{$.Room.ID}}/tasks/{{.ID}}/status">
           <input type="hidden" name="csrf" value="{{$.CSRF}}">
           <select name="status" aria-label="Task status">
@@ -230,13 +249,13 @@
           <button type="submit">Update</button>
         </form>
       </article>
-    {{else}}<div class="empty-inline"><strong>No tasks yet</strong><p class="muted">Assigned work will show up here.</p></div>{{end}}
+    {{else}}<div class="empty-inline action-empty"><strong>No tasks yet</strong><p class="muted">Create a concrete next action after reviewing a report.</p></div>{{end}}
   </section>
 </div>
 
 {{if eq .Room.Role "mentor"}}
 <div class="mentor-tools">
-  <section class="panel">
+  <section class="panel" id="invite">
     <div class="section-head">
       <div>
         <p class="eyebrow">Access</p>
@@ -270,28 +289,35 @@
       </label>
       <label>Title <input name="title" required></label>
       <label>Detail <textarea name="detail"></textarea></label>
+      <label>Deadline <input name="due_date" type="date"></label>
       <button type="submit">Assign</button>
     </form>
   </section>
 </div>
 
-<section class="panel">
+<section class="panel" id="members">
   <div class="section-head">
     <div>
       <p class="eyebrow">People</p>
       <h2>Members</h2>
     </div>
   </div>
-  <div class="table">
+  <div class="member-list">
     <div class="table-head"><span>Name</span><span>Role</span><span>Last report</span><span>Tasks</span></div>
     {{range .Members}}
-    <div><strong>{{.Name}}</strong><span>{{.Role}}</span><span>{{if .LastReport}}{{.LastReport}}{{else}}no report{{end}}</span><span>{{.OpenTasks}} open</span></div>
+    <div class="member-row">
+      <span class="member-avatar">{{printf "%.1s" .Name}}</span>
+      <strong>{{.Name}}</strong>
+      <span class="pill">{{.Role}}</span>
+      <span>{{if .LastReport}}{{.LastReport}}{{else}}no report{{end}}</span>
+      <span>{{.OpenTasks}} open</span>
+    </div>
     {{end}}
   </div>
 </section>
 {{end}}
 
-<section class="panel">
+<section class="panel" id="reports">
   <div class="section-head">
     <div>
       <p class="eyebrow">Timeline</p>
@@ -299,7 +325,7 @@
     </div>
   </div>
   {{range .Reports}}
-    <article class="report-card">
+    <article class="report-card {{if .Blocker}}has-blocker{{end}}">
       <div class="item-head">
         <div>
           <strong>{{.Author}}</strong>
