@@ -21,6 +21,12 @@
       <button class="link" type="submit">Logout</button>
     </form>
   </nav>
+  {{else}}
+  <nav>
+    <a href="/login">Login</a>
+    <a href="/join">Join</a>
+    {{if .SetupNeeded}}<a class="nav-button" href="/setup">Set up</a>{{end}}
+  </nav>
   {{end}}
 </header>
 <main class="shell">
@@ -30,12 +36,56 @@
 
 {{define "layout_end"}}</main></body></html>{{end}}
 
+{{define "landing"}}{{template "layout_start" .}}
+<section class="landing-hero">
+  <div class="landing-content">
+    <p class="eyebrow">Mentor-led learning rooms</p>
+    <h1>Sinau</h1>
+    <p class="landing-lede">A private progress tracker for mentors guiding learners through reports, feedback, blockers, and next tasks.</p>
+    <div class="landing-actions">
+      {{if .SetupNeeded}}<a class="button primary" href="/setup">Create first room</a>{{end}}
+      <a class="button secondary" href="/login">Login</a>
+      <a class="button secondary" href="/join">Join as learner</a>
+    </div>
+  </div>
+  <div class="landing-dashboard" aria-hidden="true">
+    <div class="mock-top">
+      <span></span><span></span><span></span>
+    </div>
+    <div class="mock-grid">
+      <div class="mock-stat"><strong>4</strong><span>waiting feedback</span></div>
+      <div class="mock-stat"><strong>2</strong><span>blocked</span></div>
+      <div class="mock-stat"><strong>9</strong><span>open tasks</span></div>
+    </div>
+    <div class="mock-report">
+      <span class="avatar"></span>
+      <div>
+        <strong>Raka submitted progress</strong>
+        <p>Built auth middleware. Blocked on session expiry tests.</p>
+      </div>
+    </div>
+    <div class="mock-report soft">
+      <span class="avatar green"></span>
+      <div>
+        <strong>Maya completed a task</strong>
+        <p>Finished SQLite migration exercise and shared notes.</p>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="landing-strip">
+  <div><strong>Invite-only</strong><span>Rooms stay private by default.</span></div>
+  <div><strong>Action queue</strong><span>Mentors see blockers and reports needing feedback.</span></div>
+  <div><strong>No uploads</strong><span>Use Docs, Drive, PDFs, Colab, and repo URLs.</span></div>
+</section>
+{{template "layout_end" .}}{{end}}
+
 {{define "setup"}}{{template "layout_start" .}}
 <section class="auth-card">
   <div class="auth-copy">
     <p class="eyebrow">Private learning rooms</p>
     <h1>Set Up First Room</h1>
-    <p class="muted">Create the first mentor account and start with one invite-only room.</p>
+    <p class="muted">Create the first mentor account and bootstrap the first room. You can create more rooms after setup.</p>
   </div>
   <form method="post" action="/setup" class="stack">
     <label>Name <input name="name" required autocomplete="name"></label>
@@ -60,7 +110,7 @@
     <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
     <button type="submit">Login</button>
   </form>
-  <p class="muted">Joining requires an invite code from a mentor.</p>
+  <p class="muted">New learner? <a href="/join">Join with an invite code</a>.</p>
 </section>
 {{template "layout_end" .}}{{end}}
 
@@ -88,6 +138,20 @@
     <h1>Rooms</h1>
   </div>
 </div>
+{{if .CanCreateRoom}}
+<section class="create-room-band">
+  <div>
+    <h2>Create another room</h2>
+    <p class="muted">Use separate rooms for cohorts, topics, teams, or learning tracks.</p>
+  </div>
+  <form method="post" action="/rooms" class="create-room-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label class="sr-only">Room name</label>
+    <input name="name" required placeholder="Frontend cohort">
+    <button type="submit">Create room</button>
+  </form>
+</section>
+{{end}}
 <div class="room-grid">
 {{range .Rooms}}
   <a class="room-card" href="/rooms/{{.ID}}">

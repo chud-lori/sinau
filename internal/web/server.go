@@ -32,23 +32,24 @@ type ctxKey string
 const userKey ctxKey = "user"
 
 type PageData struct {
-	Title       string
-	User        *domain.User
-	CSRF        string
-	Error       string
-	Notice      string
-	SetupNeeded bool
-	Rooms       []domain.Room
-	Room        domain.Room
-	Members     []domain.Member
-	Reports     []domain.Report
-	Report      domain.Report
-	Comments    []domain.Comment
-	Tasks       []domain.Task
-	Invites     []domain.Invite
-	InviteCode  string
-	JoinCode    string
-	Stats       domain.Stats
+	Title         string
+	User          *domain.User
+	CSRF          string
+	Error         string
+	Notice        string
+	SetupNeeded   bool
+	Rooms         []domain.Room
+	Room          domain.Room
+	Members       []domain.Member
+	Reports       []domain.Report
+	Report        domain.Report
+	Comments      []domain.Comment
+	Tasks         []domain.Task
+	Invites       []domain.Invite
+	InviteCode    string
+	JoinCode      string
+	Stats         domain.Stats
+	CanCreateRoom bool
 }
 
 func New(cfg Config) (*Server, error) {
@@ -75,6 +76,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /logout", s.auth(s.logout))
 	mux.HandleFunc("GET /join", s.withUser(s.joinForm))
 	mux.HandleFunc("POST /join", s.join)
+	mux.HandleFunc("POST /rooms", s.auth(s.createRoom))
 	mux.HandleFunc("GET /rooms/{roomID}", s.auth(s.roomPage))
 	mux.HandleFunc("POST /rooms/{roomID}/invites", s.auth(s.createInvite))
 	mux.HandleFunc("POST /rooms/{roomID}/reports", s.auth(s.createReport))
@@ -147,11 +149,7 @@ func (s *Server) validCSRF(r *http.Request) bool {
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	u := current(r)
 	if u == nil {
-		if s.store.UserCount() == 0 {
-			http.Redirect(w, r, "/setup", http.StatusSeeOther)
-			return
-		}
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		s.render(w, "landing", PageData{Title: "Mentor-led learning rooms", SetupNeeded: s.store.UserCount() == 0})
 		return
 	}
 	rooms, err := s.store.RoomsFor(u.ID)
@@ -159,7 +157,7 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
-	s.render(w, "home", PageData{Title: "Rooms", User: u, CSRF: s.csrfFor(r), Rooms: rooms})
+	s.render(w, "home", PageData{Title: "Rooms", User: u, CSRF: s.csrfFor(r), Rooms: rooms, CanCreateRoom: s.store.IsMentor(u.ID)})
 }
 
 func (s *Server) setupForm(w http.ResponseWriter, r *http.Request) {
@@ -261,6 +259,25 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.issueSession(w, uid); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
+func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	if !s.store.IsMentor(u.ID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	name := auth.Clean(r.FormValue("name"), 100)
+	if name == "" {
+		http.Error(w, "room name required", http.StatusBadRequest)
+		return
+	}
+	roomID, err := s.store.CreateRoom(name, u.ID)
+	if err != nil {
 		s.serverError(w, err)
 		return
 	}

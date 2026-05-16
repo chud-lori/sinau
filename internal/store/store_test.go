@@ -114,6 +114,28 @@ func TestLearnerOnlySeesOwnReports(t *testing.T) {
 	}
 }
 
+func TestMentorCanCreateMultipleRooms(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, firstRoomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
+	secondRoomID, err := st.CreateRoom("Frontend", mentorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondRoomID == "" || secondRoomID == firstRoomID {
+		t.Fatal("second room id was not unique")
+	}
+	rooms, err := st.RoomsFor(mentorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rooms) != 2 {
+		t.Fatalf("expected two rooms, got %d", len(rooms))
+	}
+	if !st.IsMentor(mentorID) {
+		t.Fatal("mentor should be able to create rooms")
+	}
+}
+
 func TestTaskUpdateAuthorization(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")

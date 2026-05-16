@@ -244,6 +244,32 @@ func (s *Store) RoomsFor(userID string) ([]domain.Room, error) {
 	return out, rows.Err()
 }
 
+func (s *Store) IsMentor(userID string) bool {
+	var n int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM memberships WHERE user_id = ? AND role = ?`, userID, domain.RoleMentor).Scan(&n)
+	return n > 0
+}
+
+func (s *Store) CreateRoom(name, mentorID string) (string, error) {
+	roomID, err := auth.NewID()
+	if err != nil {
+		return "", err
+	}
+	now := auth.Now()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO rooms(id,name,created_by,created_at) VALUES(?,?,?,?)`, roomID, name, mentorID, now); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(`INSERT INTO memberships(room_id,user_id,role,created_at) VALUES(?,?,?,?)`, roomID, mentorID, domain.RoleMentor, now); err != nil {
+		return "", err
+	}
+	return roomID, tx.Commit()
+}
+
 func (s *Store) RoomAccess(roomID, userID string) (domain.Room, string, bool) {
 	var rm domain.Room
 	var role string
