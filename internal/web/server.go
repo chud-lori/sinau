@@ -110,6 +110,11 @@ func (s *Server) Handler() http.Handler {
 	if s.notificationsEnabled {
 		mux.HandleFunc("GET /settings", s.auth(s.settingsPage))
 		mux.HandleFunc("POST /settings", s.auth(s.updateSettings))
+	} else {
+		// Explicit 404 so /settings doesn't fall through to the home
+		// handler (Go's ServeMux treats "GET /" as a catch-all).
+		mux.HandleFunc("GET /settings", http.NotFound)
+		mux.HandleFunc("POST /settings", http.NotFound)
 	}
 	mux.HandleFunc("GET /help", s.withUser(s.helpPage))
 	return securityHeaders(mux)

@@ -82,6 +82,7 @@ SINAU_DB=/var/lib/sinau/sinau.db
 SINAU_TEMPLATES=/opt/sinau/templates
 SINAU_STATIC=/opt/sinau/static
 SINAU_SECURE_COOKIE=true
+SINAU_NOTIFICATIONS_ENABLED=true
 SINAU_REMINDERS=true
 SINAU_REMINDER_INTERVAL=1h
 SINAU_REMINDER_WINDOW=24h
@@ -279,6 +280,10 @@ This is intentional. Email, WhatsApp, Telegram, or Discord can be added behind t
 Controls:
 
 ```sh
+# Master switch. false → no reminder worker, no /settings, no Notifications
+# section on /help, no Settings link in the topbar.
+SINAU_NOTIFICATIONS_ENABLED=true
+# Granular switch: false keeps the UI but pauses dispatch.
 SINAU_REMINDERS=true
 SINAU_REMINDER_INTERVAL=1h
 SINAU_REMINDER_WINDOW=24h

@@ -27,7 +27,15 @@ Environment:
 - `SINAU_TEMPLATES`, default `templates`
 - `SINAU_STATIC`, default `static`
 - `SINAU_SECURE_COOKIE`, set `true` behind HTTPS
-- `SINAU_REMINDERS`, set `false` to disable deadline reminder worker
+- `SINAU_NOTIFICATIONS_ENABLED`, default `true`. Master switch — set to
+  `false` to hide every notification-related surface: the reminder worker
+  does not start, `/settings` returns 404, the topbar "Settings" link is
+  hidden, and the Notifications section disappears from `/help`.
+  Gamification (points, leaderboard) is independent and stays on.
+- `SINAU_REMINDERS`, default `true`. Granular toggle for the reminder
+  worker only — set `false` to keep `/settings` visible (so users can
+  opt in) but stop background dispatches. Has no effect when
+  `SINAU_NOTIFICATIONS_ENABLED=false`.
 - `SINAU_REMINDER_INTERVAL`, default `1h`
 - `SINAU_REMINDER_WINDOW`, default `24h`
 - `SINAU_SMTP_HOST`, e.g. `smtp.example.com:587`. Empty disables email
