@@ -439,9 +439,13 @@ func (s *Store) UserCount() int {
 	return n
 }
 
+// normalizeRoomMode used to silently coerce any unknown value to
+// mentorship. That swallowed typos at the boundary. Callers should
+// validate with domain.ValidRoomMode first; this remains only as a final
+// safety net inside the store.
 func normalizeRoomMode(mode string) string {
-	if mode == domain.RoomModeClassroom {
-		return domain.RoomModeClassroom
+	if domain.ValidRoomMode(mode) {
+		return mode
 	}
 	return domain.RoomModeMentorship
 }
@@ -544,15 +548,18 @@ func (s *Store) MentorDashboard(userID string) (domain.MentorDashboard, error) {
 	if err != nil {
 		return domain.MentorDashboard{}, err
 	}
-	summary, err := s.mentorSummary(userID)
+	// learnerProgress is the most expensive query in the dashboard
+	// (5 correlated subqueries × N learners). Compute once and share it
+	// with mentorSummary, which only needs the "quiet" count from it.
+	learners, err := s.learnerProgress(userID)
+	if err != nil {
+		return domain.MentorDashboard{}, err
+	}
+	summary, err := s.mentorSummary(userID, learners)
 	if err != nil {
 		return domain.MentorDashboard{}, err
 	}
 	attention, err := s.mentorAttention(userID)
-	if err != nil {
-		return domain.MentorDashboard{}, err
-	}
-	learners, err := s.learnerProgress(userID)
 	if err != nil {
 		return domain.MentorDashboard{}, err
 	}
@@ -596,7 +603,10 @@ func (s *Store) LearnerDashboard(userID string) (domain.LearnerDashboard, error)
 	return domain.LearnerDashboard{Rooms: rooms, Summary: summary, Tasks: tasks, RecentReports: reports}, nil
 }
 
-func (s *Store) mentorSummary(userID string) (domain.DashboardSummary, error) {
+// mentorSummary computes the dashboard counters. Callers should pass the
+// already-fetched learner progress slice to avoid running the expensive
+// learnerProgress query twice per dashboard render.
+func (s *Store) mentorSummary(userID string, learners []domain.LearnerProgress) (domain.DashboardSummary, error) {
 	var out domain.DashboardSummary
 	queries := []struct {
 		dst *int
@@ -621,11 +631,7 @@ func (s *Store) mentorSummary(userID string) (domain.DashboardSummary, error) {
 			return out, err
 		}
 	}
-	rows, err := s.learnerProgress(userID)
-	if err != nil {
-		return out, err
-	}
-	for _, learner := range rows {
+	for _, learner := range learners {
 		if learner.Status == "quiet" {
 			out.InactiveLearners++
 		}
@@ -858,6 +864,32 @@ func (s *Store) InviteClaim(code string) (InviteClaim, error) {
 	return claim, err
 }
 
+// InvitePreview returns the public-safe view of an invite for the join
+// page (room name, mode, role being claimed). Used so the joiner sees what
+// they're about to sign into instead of typing credentials blind. Returns
+// a preview with Valid=false when the code does not exist, is expired, or
+// has already been used — the caller can use that to hide the form or
+// show a clean error.
+func (s *Store) InvitePreview(code string) domain.InvitePreview {
+	if code == "" {
+		return domain.InvitePreview{}
+	}
+	var preview domain.InvitePreview
+	var expiresAt, usedAt string
+	err := s.db.QueryRow(`SELECT r.name, r.mode, i.role, i.expires_at, COALESCE(i.used_at, '')
+		FROM invites i JOIN rooms r ON r.id = i.room_id
+		WHERE i.code_hash = ?`, auth.HashToken(code)).
+		Scan(&preview.RoomName, &preview.RoomMode, &preview.Role, &expiresAt, &usedAt)
+	if err != nil {
+		return domain.InvitePreview{}
+	}
+	if usedAt != "" || auth.ParseTime(expiresAt).Before(time.Now().UTC()) {
+		return domain.InvitePreview{}
+	}
+	preview.Valid = true
+	return preview
+}
+
 func (s *Store) JoinWithInvite(code, name, email, passwordHash string) (string, string, error) {
 	claim, err := s.InviteClaim(code)
 	if err != nil {
@@ -948,20 +980,46 @@ func (s *Store) RoomData(roomID, userID, role string) (domain.RoomData, error) {
 			return domain.RoomData{}, err
 		}
 	}
-	classroom := domain.ClassroomData{Assignments: assignments, Submissions: submissions}
-	board, err := s.RoomLeaderboard(roomID)
-	if err != nil {
-		return domain.RoomData{}, err
+	pending := 0
+	for _, sub := range submissions {
+		if sub.Status == "submitted" {
+			pending++
+		}
 	}
-	rank, err := s.UserRankInRoom(userID, roomID)
-	if err != nil {
-		return domain.RoomData{}, err
+	classroom := domain.ClassroomData{
+		Assignments:    assignments,
+		Submissions:    submissions,
+		PendingReviews: pending,
 	}
+	// Fetch the leaderboard only when it'll actually be rendered: mentors
+	// always see it, learners only when the mentor has flipped the
+	// visibility toggle. We still need the viewer's own rank/points, so
+	// compute those from the same board (avoiding a second pass that the
+	// old UserRankInRoom call would have required).
+	var leaderboardVisible int
+	_ = s.db.QueryRow(`SELECT leaderboard_visible FROM rooms WHERE id = ?`, roomID).Scan(&leaderboardVisible)
+	var board []domain.LeaderboardEntry
+	rank := domain.Rank{}
 	myPoints := 0
-	for _, e := range board {
-		if e.UserID == userID {
-			myPoints = e.Points
-			break
+	if role == domain.RoleMentor || leaderboardVisible == 1 {
+		board, err = s.RoomLeaderboard(roomID)
+		if err != nil {
+			return domain.RoomData{}, err
+		}
+		rank.Total = len(board)
+		for _, e := range board {
+			if e.UserID == userID {
+				rank.Position = e.Rank
+				myPoints = e.Points
+				break
+			}
+		}
+	} else {
+		// Learner who can't see the full board still gets their own
+		// score; cheap single-row query.
+		rank, myPoints, err = s.learnerScore(roomID, userID)
+		if err != nil {
+			return domain.RoomData{}, err
 		}
 	}
 	return domain.RoomData{
@@ -975,6 +1033,29 @@ func (s *Store) RoomData(roomID, userID, role string) (domain.RoomData, error) {
 		MyPoints:    myPoints,
 		MyRank:      rank,
 	}, nil
+}
+
+// learnerScore returns the viewer's own points + dense rank in the room
+// without fetching the full leaderboard. Used when the room's leaderboard
+// is hidden so a learner can still see their own progress.
+func (s *Store) learnerScore(roomID, userID string) (domain.Rank, int, error) {
+	var totalLearners int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM memberships WHERE room_id = ? AND role = ?`,
+		roomID, domain.RoleLearner).Scan(&totalLearners); err != nil {
+		return domain.Rank{}, 0, err
+	}
+	var myPoints int
+	_ = s.db.QueryRow(`SELECT COALESCE(SUM(amount), 0) FROM points_ledger WHERE room_id = ? AND user_id = ?`,
+		roomID, userID).Scan(&myPoints)
+	// Dense rank: 1 + number of distinct higher scores in the room.
+	var higher int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM (
+		SELECT DISTINCT COALESCE(SUM(amount), 0) AS s FROM points_ledger
+		WHERE room_id = ? GROUP BY user_id HAVING s > ?
+	)`, roomID, myPoints).Scan(&higher); err != nil {
+		return domain.Rank{}, 0, err
+	}
+	return domain.Rank{Position: higher + 1, Total: totalLearners}, myPoints, nil
 }
 
 func (s *Store) Members(roomID string) ([]domain.Member, error) {
@@ -1175,10 +1256,23 @@ func (s *Store) UpdateTaskStatus(roomID, taskID, userID, role, status string) (b
 
 func (s *Store) Assignments(roomID, userID, role string) ([]domain.Assignment, error) {
 	if role == domain.RoleMentor {
+		// total_learners is the same value for every row in this result
+		// set, so resolve it once instead of running a correlated
+		// subquery per assignment. Submissions count uses a grouped
+		// LEFT JOIN for the same reason.
+		var totalLearners int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM memberships WHERE room_id = ? AND role = ?`,
+			roomID, domain.RoleLearner).Scan(&totalLearners); err != nil {
+			return nil, err
+		}
 		rows, err := s.db.Query(`SELECT a.id, a.room_id, a.title, a.instructions, a.resource_url, a.due_date, a.created_at,
-			(SELECT COUNT(*) FROM submissions sub WHERE sub.assignment_id = a.id) AS submitted,
-			(SELECT COUNT(*) FROM memberships m WHERE m.room_id = a.room_id AND m.role = 'learner') AS total_learners
+				COALESCE(sub.cnt, 0) AS submitted
 			FROM assignments a
+			LEFT JOIN (
+				SELECT assignment_id, COUNT(*) AS cnt
+				FROM submissions
+				GROUP BY assignment_id
+			) sub ON sub.assignment_id = a.id
 			WHERE a.room_id = ?
 			ORDER BY CASE WHEN a.due_date != '' AND a.due_date < date('now') THEN 0 WHEN a.due_date != '' THEN 1 ELSE 2 END, a.due_date ASC, a.created_at DESC`, roomID)
 		if err != nil {
@@ -1188,9 +1282,10 @@ func (s *Store) Assignments(roomID, userID, role string) ([]domain.Assignment, e
 		var out []domain.Assignment
 		for rows.Next() {
 			var a domain.Assignment
-			if err := rows.Scan(&a.ID, &a.RoomID, &a.Title, &a.Instructions, &a.ResourceURL, &a.DueDate, &a.CreatedAt, &a.Submitted, &a.TotalLearners); err != nil {
+			if err := rows.Scan(&a.ID, &a.RoomID, &a.Title, &a.Instructions, &a.ResourceURL, &a.DueDate, &a.CreatedAt, &a.Submitted); err != nil {
 				return nil, err
 			}
+			a.TotalLearners = totalLearners
 			out = append(out, a)
 		}
 		return out, rows.Err()
@@ -1200,7 +1295,13 @@ func (s *Store) Assignments(roomID, userID, role string) ([]domain.Assignment, e
 		FROM assignments a
 		LEFT JOIN submissions sub ON sub.assignment_id = a.id AND sub.student_id = ?
 		WHERE a.room_id = ?
-		ORDER BY CASE WHEN sub.status IS NULL AND a.due_date != '' AND a.due_date < date('now') THEN 0 WHEN sub.status IS NULL AND a.due_date != '' THEN 1 WHEN sub.status IS NULL THEN 2 ELSE 3 END, a.due_date ASC, a.created_at DESC`, userID, roomID)
+		ORDER BY CASE
+			WHEN sub.status = 'revise' THEN 0
+			WHEN sub.status IS NULL AND a.due_date != '' AND a.due_date < date('now') THEN 1
+			WHEN sub.status IS NULL AND a.due_date != '' THEN 2
+			WHEN sub.status IS NULL THEN 3
+			WHEN sub.status = 'submitted' THEN 4
+			ELSE 5 END, a.due_date ASC, a.created_at DESC`, userID, roomID)
 	if err != nil {
 		return nil, err
 	}
@@ -1279,10 +1380,19 @@ func (s *Store) SubmitAssignment(roomID, assignmentID, studentID, linkURL, note 
 	return nil
 }
 
+// ReviewSubmission writes the teacher's review for a single submission.
+//
+// It is idempotent against accidental double-submits: the WHERE clause
+// requires reviewed_at = '', which is only true for submissions in
+// status='submitted'. Once a teacher has reviewed (or asked for a revise),
+// the row is locked from further edits until the student resubmits, which
+// clears reviewed_at again in SubmitAssignment. Re-reviewing returns
+// (false, nil) so the handler can render a 409.
 func (s *Store) ReviewSubmission(roomID, submissionID, status, feedback, score string) (bool, error) {
 	res, err := s.db.Exec(`UPDATE submissions
 		SET status = ?, feedback = ?, score = ?, reviewed_at = ?
-		WHERE id = ? AND assignment_id IN (SELECT id FROM assignments WHERE room_id = ?)`,
+		WHERE id = ? AND reviewed_at = ''
+		  AND assignment_id IN (SELECT id FROM assignments WHERE room_id = ?)`,
 		status, feedback, score, auth.Now(), submissionID, roomID)
 	if err != nil {
 		return false, err
@@ -1437,11 +1547,20 @@ func (s *Store) UserPointsTotal(userID string) int {
 
 // RoomLeaderboard returns every learner in the room ranked by points (desc).
 // Learners with zero points still appear so newcomers see themselves.
+//
+// The points sum is pulled in via one grouped LEFT JOIN instead of a
+// per-row correlated subquery: O(N+M) rather than O(N×M) at the storage
+// engine.
 func (s *Store) RoomLeaderboard(roomID string) ([]domain.LeaderboardEntry, error) {
-	rows, err := s.db.Query(`SELECT u.id, u.name,
-			COALESCE((SELECT SUM(amount) FROM points_ledger pl WHERE pl.user_id = u.id AND pl.room_id = ?), 0) AS points
+	rows, err := s.db.Query(`SELECT u.id, u.name, COALESCE(p.points, 0) AS points
 		FROM memberships m
 		JOIN users u ON u.id = m.user_id
+		LEFT JOIN (
+			SELECT user_id, SUM(amount) AS points
+			FROM points_ledger
+			WHERE room_id = ?
+			GROUP BY user_id
+		) p ON p.user_id = u.id
 		WHERE m.room_id = ? AND m.role = ?
 		ORDER BY points DESC, u.name ASC`, roomID, roomID, domain.RoleLearner)
 	if err != nil {

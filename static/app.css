@@ -46,3 +46,4 @@ input:focus,textarea:focus,select:focus{outline:3px solid rgba(23,107,82,.16);bo
 .help-section{margin-top:18px}
 .help-steps{padding-left:22px;line-height:1.7}
 .help-steps li{margin:6px 0}
+.member-pill{display:flex;justify-content:space-between;gap:12px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff}.member-pill span{color:var(--muted)}

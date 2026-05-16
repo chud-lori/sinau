@@ -43,9 +43,9 @@
 {{define "landing"}}{{template "layout_start" .}}
 <section class="landing-hero">
   <div class="landing-content">
-    <p class="eyebrow">Mentor-led learning rooms</p>
+    <p class="eyebrow">Private learning rooms</p>
     <h1>Sinau</h1>
-    <p class="landing-lede">A private progress tracker for mentors guiding learners through reports, feedback, blockers, and next tasks.</p>
+    <p class="landing-lede">Run small mentorship cohorts with weekly reports and tasks, or run a classroom with assignments and submission review — two room formats, one private workspace.</p>
     <div class="landing-actions">
       {{if .SetupNeeded}}<a class="button primary" href="/setup">Create first room</a>{{end}}
       <a class="button secondary" href="/help">Read guide</a>
@@ -83,7 +83,7 @@
 </section>
 <section class="landing-strip">
   <div><strong>Invite-only</strong><span>Rooms stay private by default.</span></div>
-  <div><strong>Action queue</strong><span>Mentors see blockers and reports needing feedback.</span></div>
+  <div><strong>Two formats</strong><span>Mentorship for cohorts. Classroom for assignments and review.</span></div>
   <div><strong>No uploads</strong><span>Use Docs, Drive, PDFs, Colab, and repo URLs.</span></div>
 </section>
 {{template "layout_end" .}}{{end}}
@@ -126,7 +126,13 @@
   <div class="auth-copy">
     <p class="eyebrow">Invitation required</p>
     <h1>Join Room</h1>
-    <p class="muted">Use the invite from your mentor to create an account inside the correct room.</p>
+    {{if .InvitePreview.Valid}}
+      <p class="feedback-note">You're about to create an account as a <strong>{{.InvitePreview.RoleLabel}}</strong> in <strong>{{.InvitePreview.RoomName}}</strong> ({{.InvitePreview.ModeLabel}} room).</p>
+    {{else if .JoinCode}}
+      <p class="alert error">That invite isn't valid — it may be expired, already used, or mistyped.</p>
+    {{else}}
+      <p class="muted">Use the invite code your mentor sent you. We'll show what you're joining before you create the account.</p>
+    {{end}}
   </div>
   <form method="post" action="/join" class="stack">
     <label>Invite code <input name="code" value="{{.JoinCode}}" required></label>
@@ -194,7 +200,7 @@
     </div>
       <div class="mini-room-list">
       {{range .MentorDash.Rooms}}
-        <a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{.Mode}}</span></a>
+        <a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{.MyRoleLabel}} · {{.ModeLabel}}</span></a>
       {{else}}
         <div class="empty-inline"><strong>No rooms</strong><p class="muted">Create your first cohort room.</p></div>
       {{end}}
@@ -259,7 +265,7 @@
   <section class="panel">
     <div class="section-head"><div><p class="eyebrow">Rooms</p><h2>My rooms</h2></div></div>
     <div class="mini-room-list">
-      {{range .LearnerDash.Rooms}}<a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{.Mode}}</span></a>{{else}}<div class="empty-inline"><strong>No rooms</strong><p class="muted">Join with an invite code from your mentor.</p></div>{{end}}
+      {{range .LearnerDash.Rooms}}<a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{.MyRoleLabel}} · {{.ModeLabel}}</span></a>{{else}}<div class="empty-inline"><strong>No rooms</strong><p class="muted">Join with an invite code from your mentor.</p></div>{{end}}
     </div>
   </section>
 </div>
@@ -283,11 +289,11 @@
   <div>
     <a class="back-link" href="/">All rooms</a>
     <h1>{{.Room.Name}}</h1>
-    <p class="muted">{{if eq .Room.Role "mentor"}}Review reports, unblock learners, and assign the next concrete task.{{else}}Submit progress, track assigned tasks, and keep mentor feedback in one place.{{end}}</p>
+    <p class="muted">{{if and (eq .Room.Role "mentor") (eq .Room.Mode "classroom")}}Publish assignments, review submissions, and keep the class on track.{{else if eq .Room.Role "mentor"}}Review reports, unblock learners, and assign the next concrete task.{{else if eq .Room.Mode "classroom"}}Submit assignments, watch for feedback, and resubmit when your teacher asks for revisions.{{else}}Submit progress, track assigned tasks, and keep mentor feedback in one place.{{end}}</p>
   </div>
   <div class="hero-actions">
-    <span class="pill role-pill">{{.Room.Role}}</span>
-    <span class="pill mode-pill">{{.Room.Mode}}</span>
+    <span class="pill role-pill">{{.Room.MyRoleLabel}}</span>
+    <span class="pill mode-pill">{{.Room.ModeLabel}}</span>
     {{if eq .Room.Role "mentor"}}<a class="button secondary" href="#invite">Invite people</a>{{end}}
   </div>
 </div>
@@ -371,7 +377,7 @@
   <section class="panel" id="submissions">
     <div class="section-head"><div><p class="eyebrow">Classroom</p><h2>Members</h2></div></div>
     <div class="mini-room-list">
-      {{range .Members}}<a href="/rooms/{{$.Room.ID}}"><strong>{{.Name}}</strong><span>{{.Role}}</span></a>{{end}}
+      {{range .Members}}<div class="member-pill"><strong>{{.Name}}</strong><span>{{$.Room.RoleLabel .Role}}</span></div>{{end}}
     </div>
   </section>
 </div>
@@ -403,19 +409,27 @@
         </div>
         {{if .Note}}<p>{{.Note}}</p>{{end}}
         <p class="report-actions"><a href="{{.LinkURL}}" rel="noreferrer" target="_blank">Open submission</a></p>
-        <form method="post" action="/rooms/{{$.Room.ID}}/submissions/{{.ID}}/review" class="review-form">
-          <input type="hidden" name="csrf" value="{{$.CSRF}}">
-          <select name="status" aria-label="Review status">
-            <option value="reviewed">reviewed</option>
-            <option value="revise">needs revision</option>
-          </select>
-          <input name="score" placeholder="Score">
-          <textarea name="feedback" placeholder="Feedback"></textarea>
-          <button type="submit">Save review</button>
-        </form>
+        {{if eq .Status "submitted"}}
+          <form method="post" action="/rooms/{{$.Room.ID}}/submissions/{{.ID}}/review" class="review-form">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <select name="status" aria-label="Review status">
+              <option value="reviewed">reviewed</option>
+              <option value="revise">needs revision</option>
+            </select>
+            <input name="score" type="number" inputmode="numeric" min="0" max="100" placeholder="0-100">
+            <textarea name="feedback" placeholder="Feedback"></textarea>
+            <button type="submit">Save review</button>
+          </form>
+        {{else}}
+          <p class="feedback-note">
+            <strong>Reviewed{{if .Score}} · {{.Score}}{{end}}{{if .ReviewedAt}} · {{.ReviewedAt}}{{end}}</strong>
+            {{if .Feedback}}<br>{{.Feedback}}{{end}}
+            {{if eq .Status "revise"}}<br><em class="muted">Waiting for the student to resubmit.</em>{{end}}
+          </p>
+        {{end}}
       </article>
     {{else}}
-      <div class="empty-inline action-empty"><strong>No submissions yet</strong><p class="muted">Student submissions will appear here for review.</p></div>
+      <div class="empty-inline action-empty"><strong>No submissions yet</strong><p class="muted">Student submissions will appear here once your class starts handing work in.</p></div>
     {{end}}
   </section>
 </div>
@@ -470,7 +484,7 @@
       <div class="member-row">
         <span class="member-avatar">{{printf "%.1s" .Name}}</span>
         <strong>{{.Name}}</strong>
-        <span class="pill">{{if eq .Role "learner"}}student{{else}}teacher{{end}}</span>
+        <span class="pill">{{$.Room.RoleLabel .Role}}</span>
         <span>{{.Email}}</span>
         <span>{{.OpenTasks}} open</span>
       </div>
@@ -699,7 +713,7 @@
     <div class="member-row">
       <span class="member-avatar">{{printf "%.1s" .Name}}</span>
       <strong>{{.Name}}</strong>
-      <span class="pill">{{.Role}}</span>
+      <span class="pill">{{$.Room.RoleLabel .Role}}</span>
       <span>{{if .LastReport}}{{.LastReport}}{{else}}no report{{end}}</span>
       <span>{{.OpenTasks}} open</span>
     </div>

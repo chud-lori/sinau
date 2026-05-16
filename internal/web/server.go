@@ -48,6 +48,7 @@ type PageData struct {
 	UserPoints           int
 	Rooms                []domain.Room
 	Room                 domain.Room
+	InvitePreview        domain.InvitePreview
 	Members              []domain.Member
 	Reports              []domain.Report
 	Report               domain.Report
@@ -93,7 +94,6 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(s.staticDir))))
 	mux.HandleFunc("GET /", s.withUser(s.home))
-	mux.HandleFunc("GET /guide", s.withUser(s.guide))
 	mux.HandleFunc("GET /setup", s.withUser(s.setupForm))
 	mux.HandleFunc("POST /setup", s.rateLimit(s.setup))
 	mux.HandleFunc("GET /login", s.withUser(s.loginForm))
@@ -124,6 +124,11 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("POST /settings", http.NotFound)
 	}
 	mux.HandleFunc("GET /help", s.withUser(s.helpPage))
+	// /guide was a duplicate of /help in an earlier revision. Redirect any
+	// bookmarks at it to the canonical URL.
+	mux.HandleFunc("GET /guide", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/help", http.StatusMovedPermanently)
+	})
 	return securityHeaders(mux)
 }
 
@@ -245,10 +250,6 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "learner_home", pd)
 }
 
-func (s *Server) guide(w http.ResponseWriter, r *http.Request) {
-	s.helpPage(w, r)
-}
-
 func (s *Server) setupForm(w http.ResponseWriter, r *http.Request) {
 	if s.store.UserCount() > 0 {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -334,7 +335,11 @@ func (s *Server) joinForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := auth.Clean(r.URL.Query().Get("code"), 120)
-	s.render(w, "join", PageData{Title: "Join", JoinCode: code})
+	pd := PageData{Title: "Join", JoinCode: code}
+	if code != "" {
+		pd.InvitePreview = s.store.InvitePreview(code)
+	}
+	s.render(w, "join", pd)
 }
 
 func (s *Server) join(w http.ResponseWriter, r *http.Request) {
@@ -342,8 +347,9 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	name := auth.Clean(r.FormValue("name"), 80)
 	email := strings.ToLower(auth.Clean(r.FormValue("email"), 160))
 	password := r.FormValue("password")
+	preview := s.store.InvitePreview(code)
 	if code == "" || name == "" || !auth.ValidEmail(email) || len(password) < 12 {
-		s.render(w, "join", PageData{Title: "Join", JoinCode: code, Error: "Use invite code, name, valid email, and password with at least 12 characters."})
+		s.render(w, "join", PageData{Title: "Join", JoinCode: code, InvitePreview: preview, Error: "Use invite code, name, valid email, and password with at least 12 characters."})
 		return
 	}
 	hash, err := auth.HashPassword(password)
@@ -353,7 +359,7 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	}
 	uid, roomID, err := s.store.JoinWithInvite(code, name, email, hash)
 	if err != nil {
-		s.render(w, "join", PageData{Title: "Join", JoinCode: code, Error: "Invite is invalid, used, expired, or the email is already registered."})
+		s.render(w, "join", PageData{Title: "Join", JoinCode: code, InvitePreview: preview, Error: "Invite is invalid, used, expired, or the email is already registered."})
 		return
 	}
 	if err := s.issueSession(w, uid); err != nil {
@@ -373,6 +379,13 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 	mode := auth.Clean(r.FormValue("mode"), 40)
 	if name == "" {
 		http.Error(w, "room name required", http.StatusBadRequest)
+		return
+	}
+	if mode == "" {
+		mode = domain.RoomModeMentorship
+	}
+	if !domain.ValidRoomMode(mode) {
+		http.Error(w, "unknown room format", http.StatusBadRequest)
 		return
 	}
 	roomID, err := s.store.CreateRoom(name, u.ID, mode)
@@ -411,20 +424,14 @@ func (s *Server) roomPage(w http.ResponseWriter, r *http.Request) {
 	pd.Tasks = data.Tasks
 	pd.Assignments = data.Classroom.Assignments
 	pd.Submissions = data.Classroom.Submissions
-	for _, sub := range data.Classroom.Submissions {
-		if sub.Status == "submitted" {
-			pd.PendingReviews++
-		}
-	}
+	pd.PendingReviews = data.Classroom.PendingReviews
 	pd.Invites = data.Invites
 	pd.Stats = data.Stats
 	pd.MyPoints = data.MyPoints
 	pd.MyRank = data.MyRank
-	// Mentor always sees the full leaderboard; learners only see it when
-	// the room owner has flipped the visibility toggle.
-	if role == domain.RoleMentor || rm.LeaderboardVisible {
-		pd.Leaderboard = data.Leaderboard
-	}
+	// data.Leaderboard is already empty for learners in rooms with the
+	// visibility toggle off (see RoomData), so a direct copy is safe.
+	pd.Leaderboard = data.Leaderboard
 	s.render(w, "room", pd)
 }
 
@@ -734,11 +741,10 @@ func (s *Server) updateRoomSettings(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
 }
 
+// settingsPage / updateSettings are only registered when
+// notificationsEnabled is true (see Handler()). No second guard needed
+// inside the handlers — the route layer owns the gate.
 func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
-	if !s.notificationsEnabled {
-		http.NotFound(w, r)
-		return
-	}
 	u := current(r)
 	pd := s.pageData(r, "Settings")
 	pd.Prefs = s.store.NotificationPrefsFor(u.ID)
@@ -749,10 +755,6 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
-	if !s.notificationsEnabled {
-		http.NotFound(w, r)
-		return
-	}
 	u := current(r)
 	enabled := r.FormValue("enabled") == "on" || r.FormValue("enabled") == "1"
 	channel := r.FormValue("channel")
