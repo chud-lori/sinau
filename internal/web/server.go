@@ -50,6 +50,8 @@ type PageData struct {
 	JoinCode      string
 	Stats         domain.Stats
 	CanCreateRoom bool
+	MentorDash    domain.MentorDashboard
+	LearnerDash   domain.LearnerDashboard
 }
 
 func New(cfg Config) (*Server, error) {
@@ -152,12 +154,21 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		s.render(w, "landing", PageData{Title: "Mentor-led learning rooms", SetupNeeded: s.store.UserCount() == 0})
 		return
 	}
-	rooms, err := s.store.RoomsFor(u.ID)
+	if s.store.IsMentor(u.ID) {
+		dash, err := s.store.MentorDashboard(u.ID)
+		if err != nil {
+			s.serverError(w, err)
+			return
+		}
+		s.render(w, "mentor_home", PageData{Title: "Mentor Dashboard", User: u, CSRF: s.csrfFor(r), Rooms: dash.Rooms, CanCreateRoom: true, MentorDash: dash})
+		return
+	}
+	dash, err := s.store.LearnerDashboard(u.ID)
 	if err != nil {
 		s.serverError(w, err)
 		return
 	}
-	s.render(w, "home", PageData{Title: "Rooms", User: u, CSRF: s.csrfFor(r), Rooms: rooms, CanCreateRoom: s.store.IsMentor(u.ID)})
+	s.render(w, "learner_home", PageData{Title: "My Progress", User: u, CSRF: s.csrfFor(r), Rooms: dash.Rooms, LearnerDash: dash})
 }
 
 func (s *Server) setupForm(w http.ResponseWriter, r *http.Request) {

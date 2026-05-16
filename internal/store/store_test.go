@@ -233,3 +233,40 @@ func TestTaskDueDateAndReminders(t *testing.T) {
 		t.Fatalf("reminder repeated same day: %+v", rems)
 	}
 }
+
+func TestRoleDashboards(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
+	code := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
+	learnerID, _ := joinLearner(t, st, code, "Learner", "learner@example.com")
+
+	if err := st.CreateReport(roomID, learnerID, "learned", "practiced", "blocked", "next", ""); err != nil {
+		t.Fatal(err)
+	}
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	if err := st.CreateTask(roomID, learnerID, mentorID, "Overdue task", "detail", yesterday); err != nil {
+		t.Fatal(err)
+	}
+
+	mentorDash, err := st.MentorDashboard(mentorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mentorDash.Summary.ActiveLearners != 1 || mentorDash.Summary.Blockers != 1 || mentorDash.Summary.OverdueTasks != 1 {
+		t.Fatalf("bad mentor summary: %+v", mentorDash.Summary)
+	}
+	if len(mentorDash.AttentionItems) == 0 {
+		t.Fatal("expected attention items")
+	}
+	if len(mentorDash.Learners) != 1 || mentorDash.Learners[0].Status != "overdue" {
+		t.Fatalf("bad learner progress: %+v", mentorDash.Learners)
+	}
+
+	learnerDash, err := st.LearnerDashboard(learnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if learnerDash.Summary.OpenTasks != 1 || learnerDash.Summary.OverdueTasks != 1 || learnerDash.Summary.Blockers != 1 {
+		t.Fatalf("bad learner summary: %+v", learnerDash.Summary)
+	}
+}

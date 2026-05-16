@@ -257,6 +257,243 @@ func (s *Store) IsMentor(userID string) bool {
 	return n > 0
 }
 
+func (s *Store) MentorDashboard(userID string) (domain.MentorDashboard, error) {
+	rooms, err := s.RoomsFor(userID)
+	if err != nil {
+		return domain.MentorDashboard{}, err
+	}
+	summary, err := s.mentorSummary(userID)
+	if err != nil {
+		return domain.MentorDashboard{}, err
+	}
+	attention, err := s.mentorAttention(userID)
+	if err != nil {
+		return domain.MentorDashboard{}, err
+	}
+	learners, err := s.learnerProgress(userID)
+	if err != nil {
+		return domain.MentorDashboard{}, err
+	}
+	return domain.MentorDashboard{Rooms: rooms, Summary: summary, AttentionItems: attention, Learners: learners}, nil
+}
+
+func (s *Store) LearnerDashboard(userID string) (domain.LearnerDashboard, error) {
+	rooms, err := s.RoomsFor(userID)
+	if err != nil {
+		return domain.LearnerDashboard{}, err
+	}
+	tasks, err := s.learnerDashboardTasks(userID)
+	if err != nil {
+		return domain.LearnerDashboard{}, err
+	}
+	reports, err := s.learnerRecentReports(userID)
+	if err != nil {
+		return domain.LearnerDashboard{}, err
+	}
+	summary := domain.DashboardSummary{Rooms: len(rooms)}
+	for _, t := range tasks {
+		if t.Status != "done" {
+			summary.OpenTasks++
+		}
+		switch t.DueState {
+		case "due-soon":
+			summary.DueSoonTasks++
+		case "overdue":
+			summary.OverdueTasks++
+		}
+	}
+	weekStart := time.Now().UTC().AddDate(0, 0, -7).Format(time.RFC3339)
+	for _, r := range reports {
+		if r.CreatedAt >= weekStart {
+			summary.ReportsThisWeek++
+		}
+		if r.Blocker != "" {
+			summary.Blockers++
+		}
+	}
+	return domain.LearnerDashboard{Rooms: rooms, Summary: summary, Tasks: tasks, RecentReports: reports}, nil
+}
+
+func (s *Store) mentorSummary(userID string) (domain.DashboardSummary, error) {
+	var out domain.DashboardSummary
+	queries := []struct {
+		dst *int
+		sql string
+	}{
+		{&out.Rooms, `SELECT COUNT(*) FROM memberships WHERE user_id = ? AND role = 'mentor'`},
+		{&out.ActiveLearners, `SELECT COUNT(DISTINCT ml.user_id) FROM memberships mr JOIN memberships ml ON ml.room_id = mr.room_id AND ml.role = 'learner' WHERE mr.user_id = ? AND mr.role = 'mentor'`},
+		{&out.WaitingFeedback, `SELECT COUNT(*) FROM memberships mr JOIN reports rp ON rp.room_id = mr.room_id LEFT JOIN comments c ON c.report_id = rp.id WHERE mr.user_id = ? AND mr.role = 'mentor' GROUP BY rp.id HAVING COUNT(c.id) = 0`},
+		{&out.Blockers, `SELECT COUNT(*) FROM memberships mr JOIN reports rp ON rp.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND rp.blocker != ''`},
+		{&out.OpenTasks, `SELECT COUNT(*) FROM memberships mr JOIN tasks t ON t.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done'`},
+		{&out.DueSoonTasks, `SELECT COUNT(*) FROM memberships mr JOIN tasks t ON t.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done' AND t.due_date != '' AND t.due_date >= date('now') AND t.due_date <= date('now', '+2 day')`},
+		{&out.OverdueTasks, `SELECT COUNT(*) FROM memberships mr JOIN tasks t ON t.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done' AND t.due_date != '' AND t.due_date < date('now')`},
+		{&out.ReportsThisWeek, `SELECT COUNT(*) FROM memberships mr JOIN reports rp ON rp.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND rp.created_at >= datetime('now', '-7 day')`},
+	}
+	for _, q := range queries {
+		if q.dst == &out.WaitingFeedback {
+			rows, err := s.db.Query(q.sql, userID)
+			if err != nil {
+				return out, err
+			}
+			for rows.Next() {
+				out.WaitingFeedback++
+			}
+			if err := rows.Err(); err != nil {
+				_ = rows.Close()
+				return out, err
+			}
+			_ = rows.Close()
+			continue
+		}
+		if err := s.db.QueryRow(q.sql, userID).Scan(q.dst); err != nil {
+			return out, err
+		}
+	}
+	rows, err := s.learnerProgress(userID)
+	if err != nil {
+		return out, err
+	}
+	for _, learner := range rows {
+		if learner.Status == "quiet" {
+			out.InactiveLearners++
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) learnerDashboardTasks(userID string) ([]domain.Task, error) {
+	rows, err := s.db.Query(`SELECT t.id, t.title, t.detail, t.status, r.name, t.due_date, t.created_at
+		FROM tasks t
+		JOIN rooms r ON r.id = t.room_id
+		WHERE t.assigned_to = ? AND t.status != 'done'
+		ORDER BY CASE WHEN t.due_date != '' AND t.due_date < date('now') THEN 0 WHEN t.due_date != '' THEN 1 ELSE 2 END, t.due_date ASC, t.created_at DESC
+		LIMIT 12`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Task
+	for rows.Next() {
+		var t domain.Task
+		if err := rows.Scan(&t.ID, &t.Title, &t.Detail, &t.Status, &t.Assignee, &t.DueDate, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		t.DueState = dueState(t.DueDate, t.Status, time.Now().UTC())
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) learnerRecentReports(userID string) ([]domain.Report, error) {
+	rows, err := s.db.Query(`SELECT rp.id, rp.room_id, rp.user_id, r.name, rp.learned, rp.practiced, rp.blocker, rp.next_plan, rp.link_url, rp.created_at, COUNT(c.id)
+		FROM reports rp
+		JOIN rooms r ON r.id = rp.room_id
+		LEFT JOIN comments c ON c.report_id = rp.id
+		WHERE rp.user_id = ?
+		GROUP BY rp.id
+		ORDER BY rp.created_at DESC
+		LIMIT 8`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Report
+	for rows.Next() {
+		var r domain.Report
+		if err := rows.Scan(&r.ID, &r.RoomID, &r.UserID, &r.Author, &r.Learned, &r.Practiced, &r.Blocker, &r.NextPlan, &r.LinkURL, &r.CreatedAt, &r.Comments); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func learnerStatus(lp domain.LearnerProgress) string {
+	if lp.OverdueTasks > 0 {
+		return "overdue"
+	}
+	if lp.Blockers > 0 {
+		return "blocked"
+	}
+	if lp.LastReport == "" {
+		return "quiet"
+	}
+	if lp.ReportsThisWeek > 0 {
+		return "active"
+	}
+	return "quiet"
+}
+
+func (s *Store) mentorAttention(userID string) ([]domain.AttentionItem, error) {
+	rows, err := s.db.Query(`SELECT 'overdue', r.id, r.name, u.id, u.name, t.title, t.detail, t.due_date, t.created_at
+		FROM memberships mr
+		JOIN tasks t ON t.room_id = mr.room_id
+		JOIN rooms r ON r.id = t.room_id
+		JOIN users u ON u.id = t.assigned_to
+		WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done' AND t.due_date != '' AND t.due_date < date('now')
+		UNION ALL
+		SELECT 'blocker', r.id, r.name, u.id, u.name, 'Blocked report', rp.blocker, '', rp.created_at
+		FROM memberships mr
+		JOIN reports rp ON rp.room_id = mr.room_id
+		JOIN rooms r ON r.id = rp.room_id
+		JOIN users u ON u.id = rp.user_id
+		WHERE mr.user_id = ? AND mr.role = 'mentor' AND rp.blocker != ''
+		UNION ALL
+		SELECT 'feedback', r.id, r.name, u.id, u.name, 'Report needs feedback', rp.learned, '', rp.created_at
+		FROM memberships mr
+		JOIN reports rp ON rp.room_id = mr.room_id
+		JOIN rooms r ON r.id = rp.room_id
+		JOIN users u ON u.id = rp.user_id
+		LEFT JOIN comments c ON c.report_id = rp.id
+		WHERE mr.user_id = ? AND mr.role = 'mentor'
+		GROUP BY rp.id
+		HAVING COUNT(c.id) = 0
+		ORDER BY 9 DESC
+		LIMIT 12`, userID, userID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.AttentionItem
+	for rows.Next() {
+		var item domain.AttentionItem
+		if err := rows.Scan(&item.Kind, &item.RoomID, &item.RoomName, &item.UserID, &item.UserName, &item.Title, &item.Detail, &item.DueDate, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) learnerProgress(userID string) ([]domain.LearnerProgress, error) {
+	rows, err := s.db.Query(`SELECT u.id, u.name, u.email, r.id, r.name,
+		COALESCE((SELECT MAX(rp.created_at) FROM reports rp WHERE rp.room_id = r.id AND rp.user_id = u.id), '') AS last_report,
+		(SELECT COUNT(*) FROM reports rp WHERE rp.room_id = r.id AND rp.user_id = u.id AND rp.created_at >= datetime('now', '-7 day')) AS reports_week,
+		(SELECT COUNT(*) FROM tasks t WHERE t.room_id = r.id AND t.assigned_to = u.id AND t.status != 'done') AS open_tasks,
+		(SELECT COUNT(*) FROM tasks t WHERE t.room_id = r.id AND t.assigned_to = u.id AND t.status != 'done' AND t.due_date != '' AND t.due_date < date('now')) AS overdue_tasks,
+		(SELECT COUNT(*) FROM reports rp WHERE rp.room_id = r.id AND rp.user_id = u.id AND rp.blocker != '') AS blockers
+		FROM memberships mr
+		JOIN rooms r ON r.id = mr.room_id
+		JOIN memberships ml ON ml.room_id = r.id AND ml.role = 'learner'
+		JOIN users u ON u.id = ml.user_id
+		WHERE mr.user_id = ? AND mr.role = 'mentor'
+		ORDER BY overdue_tasks DESC, blockers DESC, last_report ASC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.LearnerProgress
+	for rows.Next() {
+		var lp domain.LearnerProgress
+		if err := rows.Scan(&lp.UserID, &lp.Name, &lp.Email, &lp.RoomID, &lp.RoomName, &lp.LastReport, &lp.ReportsThisWeek, &lp.OpenTasks, &lp.OverdueTasks, &lp.Blockers); err != nil {
+			return nil, err
+		}
+		lp.Status = learnerStatus(lp)
+		out = append(out, lp)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) CreateRoom(name, mentorID string) (string, error) {
 	roomID, err := auth.NewID()
 	if err != nil {

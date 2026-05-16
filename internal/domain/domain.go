@@ -97,3 +97,55 @@ type RoomData struct {
 	Invites []Invite
 	Stats   Stats
 }
+
+type MentorDashboard struct {
+	Rooms          []Room
+	Summary        DashboardSummary
+	AttentionItems []AttentionItem
+	Learners       []LearnerProgress
+}
+
+type LearnerDashboard struct {
+	Rooms         []Room
+	Summary       DashboardSummary
+	Tasks         []Task
+	RecentReports []Report
+}
+
+type DashboardSummary struct {
+	Rooms            int
+	ActiveLearners   int
+	WaitingFeedback  int
+	Blockers         int
+	OpenTasks        int
+	DueSoonTasks     int
+	OverdueTasks     int
+	InactiveLearners int
+	ReportsThisWeek  int
+}
+
+type AttentionItem struct {
+	Kind      string
+	RoomID    string
+	RoomName  string
+	UserID    string
+	UserName  string
+	Title     string
+	Detail    string
+	DueDate   string
+	CreatedAt string
+}
+
+type LearnerProgress struct {
+	UserID          string
+	Name            string
+	Email           string
+	RoomID          string
+	RoomName        string
+	LastReport      string
+	ReportsThisWeek int
+	OpenTasks       int
+	OverdueTasks    int
+	Blockers        int
+	Status          string
+}

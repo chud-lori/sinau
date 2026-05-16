@@ -170,6 +170,142 @@
 </div>
 {{template "layout_end" .}}{{end}}
 
+{{define "mentor_home"}}{{template "layout_start" .}}
+<section class="dash-home-hero">
+  <div>
+    <p class="eyebrow">Mentor command center</p>
+    <h1>Welcome back, {{.User.Name}}</h1>
+    <p class="muted">Start with blockers, overdue tasks, and reports waiting for your feedback.</p>
+  </div>
+  <form method="post" action="/rooms" class="create-room-form compact">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input name="name" required placeholder="New cohort room">
+    <button type="submit">Create room</button>
+  </form>
+</section>
+
+<section class="mentor-summary">
+  <div><span>Rooms</span><strong>{{.MentorDash.Summary.Rooms}}</strong></div>
+  <div><span>Learners</span><strong>{{.MentorDash.Summary.ActiveLearners}}</strong></div>
+  <div><span>Need feedback</span><strong>{{.MentorDash.Summary.WaitingFeedback}}</strong></div>
+  <div><span>Blockers</span><strong>{{.MentorDash.Summary.Blockers}}</strong></div>
+  <div><span>Overdue</span><strong>{{.MentorDash.Summary.OverdueTasks}}</strong></div>
+</section>
+
+<div class="home-grid">
+  <section class="panel attention-home">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Attention queue</p>
+        <h2>Needs action</h2>
+      </div>
+    </div>
+    {{range .MentorDash.AttentionItems}}
+      <a class="attention-row {{.Kind}}" href="/rooms/{{.RoomID}}">
+        <span class="attention-kind">{{.Kind}}</span>
+        <div>
+          <strong>{{.UserName}} · {{.RoomName}}</strong>
+          <p>{{.Title}}{{if .DueDate}} · due {{.DueDate}}{{end}}</p>
+        </div>
+      </a>
+    {{else}}
+      <div class="empty-inline action-empty"><strong>No urgent work</strong><p class="muted">When learners are blocked or deadlines slip, they will appear here.</p></div>
+    {{end}}
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Rooms</p>
+        <h2>Cohorts</h2>
+      </div>
+    </div>
+    <div class="mini-room-list">
+      {{range .MentorDash.Rooms}}
+        <a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{.Role}}</span></a>
+      {{else}}
+        <div class="empty-inline"><strong>No rooms</strong><p class="muted">Create your first cohort room.</p></div>
+      {{end}}
+    </div>
+  </section>
+</div>
+
+<section class="panel learner-progress-panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">Learner progress</p>
+      <h2>People you guide</h2>
+    </div>
+  </div>
+  <div class="progress-table">
+    <div class="progress-head"><span>Learner</span><span>Room</span><span>Last report</span><span>Tasks</span><span>Status</span></div>
+    {{range .MentorDash.Learners}}
+      <a class="progress-row" href="/rooms/{{.RoomID}}">
+        <span><strong>{{.Name}}</strong><small>{{.ReportsThisWeek}} reports this week</small></span>
+        <span>{{.RoomName}}</span>
+        <span>{{if .LastReport}}{{.LastReport}}{{else}}no report{{end}}</span>
+        <span>{{.OpenTasks}} open · {{.OverdueTasks}} overdue</span>
+        <span class="status-pill {{.Status}}">{{.Status}}</span>
+      </a>
+    {{else}}
+      <div class="empty-inline"><strong>No learners yet</strong><p class="muted">Create an invite from a room and learners will show up here.</p></div>
+    {{end}}
+  </div>
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "learner_home"}}{{template "layout_start" .}}
+<section class="dash-home-hero learner">
+  <div>
+    <p class="eyebrow">My learning dashboard</p>
+    <h1>Keep momentum visible</h1>
+    <p class="muted">Track your assigned work, deadlines, recent reports, and feedback from mentors.</p>
+  </div>
+</section>
+
+<section class="mentor-summary learner-summary">
+  <div><span>Rooms</span><strong>{{.LearnerDash.Summary.Rooms}}</strong></div>
+  <div><span>Open tasks</span><strong>{{.LearnerDash.Summary.OpenTasks}}</strong></div>
+  <div><span>Due soon</span><strong>{{.LearnerDash.Summary.DueSoonTasks}}</strong></div>
+  <div><span>Overdue</span><strong>{{.LearnerDash.Summary.OverdueTasks}}</strong></div>
+  <div><span>Reports/week</span><strong>{{.LearnerDash.Summary.ReportsThisWeek}}</strong></div>
+</section>
+
+<div class="home-grid">
+  <section class="panel">
+    <div class="section-head"><div><p class="eyebrow">Next actions</p><h2>My tasks</h2></div></div>
+    {{range .LearnerDash.Tasks}}
+      <article class="task-card status-border-{{.Status}}">
+        <div class="item-head"><strong>{{.Title}}</strong><span class="status {{.Status}}">{{.Status}}</span></div>
+        {{if .Detail}}<p>{{.Detail}}</p>{{end}}
+        {{if .DueDate}}<p><span class="due-chip {{.DueState}}">Due {{.DueDate}}</span></p>{{end}}
+      </article>
+    {{else}}
+      <div class="empty-inline action-empty"><strong>No open tasks</strong><p class="muted">Assigned mentor tasks will appear here.</p></div>
+    {{end}}
+  </section>
+  <section class="panel">
+    <div class="section-head"><div><p class="eyebrow">Rooms</p><h2>My rooms</h2></div></div>
+    <div class="mini-room-list">
+      {{range .LearnerDash.Rooms}}<a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{.Role}}</span></a>{{else}}<div class="empty-inline"><strong>No rooms</strong><p class="muted">Join with an invite code from your mentor.</p></div>{{end}}
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="section-head"><div><p class="eyebrow">Recent progress</p><h2>My reports</h2></div></div>
+  {{range .LearnerDash.RecentReports}}
+    <article class="report-card {{if .Blocker}}has-blocker{{end}}">
+      <div class="item-head"><div><strong>{{.Author}}</strong><p class="muted">{{.CreatedAt}}</p></div><span class="comment-link">{{.Comments}} comments</span></div>
+      {{if .Blocker}}<p class="blocker">Blocked: {{.Blocker}}</p>{{end}}
+      <p>{{.Learned}}</p>
+    </article>
+  {{else}}
+    <div class="empty-inline"><strong>No reports yet</strong><p class="muted">Submit a progress report inside one of your rooms.</p></div>
+  {{end}}
+</section>
+{{template "layout_end" .}}{{end}}
+
 {{define "room"}}{{template "layout_start" .}}
 <div class="dashboard-hero">
   <div>
@@ -204,6 +340,7 @@
 </section>
 {{end}}
 
+{{if eq .Room.Role "learner"}}
 <div class="dashboard-grid">
   <section class="panel primary-panel checkin-panel">
     <div class="section-head">
@@ -252,6 +389,59 @@
     {{else}}<div class="empty-inline action-empty"><strong>No tasks yet</strong><p class="muted">Create a concrete next action after reviewing a report.</p></div>{{end}}
   </section>
 </div>
+{{else}}
+<div class="dashboard-grid mentor-room-grid">
+  <section class="panel attention-home" id="reports">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Review queue</p>
+        <h2>Latest learner reports</h2>
+      </div>
+    </div>
+    {{range .Reports}}
+      <article class="report-card {{if .Blocker}}has-blocker{{end}}">
+        <div class="item-head">
+          <div>
+            <strong>{{.Author}}</strong>
+            <p class="muted">{{.CreatedAt}}</p>
+          </div>
+          <a class="comment-link" href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{.Comments}} comments</a>
+        </div>
+        {{if .Blocker}}<p class="blocker">Blocked: {{.Blocker}}</p>{{end}}
+        <p>{{.Learned}}</p>
+        <div class="report-actions">
+          {{if .LinkURL}}<a href="{{.LinkURL}}" rel="noreferrer" target="_blank">Open resource</a>{{end}}
+          <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">Review report</a>
+        </div>
+      </article>
+    {{else}}
+      <div class="empty-inline action-empty"><strong>No reports yet</strong><p class="muted">Once learners submit progress, reports will appear here for feedback.</p></div>
+    {{end}}
+  </section>
+
+  <section class="panel task-panel" id="tasks">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Execution</p>
+        <h2>Open tasks</h2>
+      </div>
+    </div>
+    {{range .Tasks}}
+      <article class="task-card status-border-{{.Status}}">
+        <div class="item-head">
+          <strong>{{.Title}}</strong>
+          <span class="status {{.Status}}">{{.Status}}</span>
+        </div>
+        {{if .Detail}}<p>{{.Detail}}</p>{{end}}
+        <p class="muted">Assigned to {{.Assignee}}</p>
+        {{if .DueDate}}<p><span class="due-chip {{.DueState}}">Due {{.DueDate}}</span></p>{{end}}
+      </article>
+    {{else}}
+      <div class="empty-inline action-empty"><strong>No open tasks</strong><p class="muted">Assign tasks after reviewing learner reports.</p></div>
+    {{end}}
+  </section>
+</div>
+{{end}}
 
 {{if eq .Room.Role "mentor"}}
 <div class="mentor-tools">
@@ -317,6 +507,7 @@
 </section>
 {{end}}
 
+{{if eq .Room.Role "learner"}}
 <section class="panel" id="reports">
   <div class="section-head">
     <div>
@@ -342,6 +533,7 @@
     </article>
   {{else}}<div class="empty-inline"><strong>No reports yet</strong><p class="muted">The first progress update will start the room timeline.</p></div>{{end}}
 </section>
+{{end}}
 {{template "layout_end" .}}{{end}}
 
 {{define "invite_created"}}
