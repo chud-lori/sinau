@@ -3,7 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#176b52">
   <title>{{.Title}} - Sinau</title>
+  <meta name="description" content="Sinau — a private, mentor-led learning tracker. Run mentorship cohorts with weekly reports and tasks, or classrooms with assignments and review.">
+  <meta name="robots" content="noindex,nofollow">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Sinau">
+  <meta property="og:title" content="{{.Title}} - Sinau">
+  <meta property="og:description" content="A private, mentor-led learning tracker. Mentorship cohorts with reports and tasks, or classrooms with assignments and review.">
+  <meta property="og:image" content="/static/img/landing-hero.png">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{.Title}} - Sinau">
+  <meta name="twitter:description" content="A private, mentor-led learning tracker. Mentorship cohorts with reports and tasks, or classrooms with assignments and review.">
+  <meta name="twitter:image" content="/static/img/landing-hero.png">
+
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/htmx.min.js" defer></script>
 </head>
@@ -145,15 +161,23 @@
 {{template "layout_end" .}}{{end}}
 
 {{define "mentor_home"}}{{template "layout_start" .}}
-<section class="dash-home-hero">
+<section class="dash-home-hero solo">
   <div>
     <p class="eyebrow">Mentor command center</p>
     <h1>Welcome back, {{.User.Name}}</h1>
-    <p class="muted">Start with blockers, overdue tasks, and reports waiting for your feedback.</p>
+    <p class="muted">Start with blockers, overdue tasks, submissions awaiting review, and reports needing feedback.</p>
   </div>
-  <form method="post" action="/rooms" class="create-room-form compact">
+</section>
+
+<section class="create-room-band">
+  <div>
+    <p class="eyebrow">New room</p>
+    <h2>Create a room</h2>
+    <p class="muted">Use <strong>Mentorship</strong> for guided cohorts with reports, blockers, and tasks. Use <strong>Classroom</strong> for assignments and submission review.</p>
+  </div>
+  <form method="post" action="/rooms" class="create-room-form">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
-    <input name="name" required placeholder="New cohort room">
+    <input name="name" required placeholder="e.g. Backend cohort">
     <select name="mode" aria-label="Room format">
       <option value="mentorship">Mentorship</option>
       <option value="classroom">Classroom</option>
@@ -674,7 +698,7 @@
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <label class="checkbox-row">
         <input type="checkbox" name="leaderboard_visible" {{if .Room.LeaderboardVisible}}checked{{end}}>
-        Show the leaderboard to all learners in this room
+        <span>Show the leaderboard to all learners in this room</span>
       </label>
       <p class="muted">Off: each learner only sees their own score and rank. On: every learner sees the full cohort ranking. You always see the full leaderboard below.</p>
       <button type="submit">Save room settings</button>
@@ -730,10 +754,10 @@
       <h2>Points in this room</h2>
     </div>
   </div>
-  <div class="mentor-summary learner-summary">
+  <div class="score-grid">
     <div><span>Points</span><strong>{{.MyPoints}}</strong></div>
     {{if gt .MyRank.Total 0}}
-      <div><span>Rank</span><strong>#{{.MyRank.Position}} of {{.MyRank.Total}}</strong></div>
+      <div><span>Rank</span><strong>#{{.MyRank.Position}} <small>of {{.MyRank.Total}}</small></strong></div>
     {{end}}
   </div>
   {{if .Leaderboard}}
@@ -832,7 +856,7 @@
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label class="checkbox-row">
       <input type="checkbox" name="enabled" {{if .Prefs.Enabled}}checked{{end}}>
-      Send me deadline reminders
+      <span>Send me deadline reminders</span>
     </label>
     <label>Channel
       <select name="channel">

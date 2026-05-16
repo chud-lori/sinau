@@ -12,8 +12,8 @@ nav{display:flex;gap:16px;align-items:center}nav form{margin:0}.user-chip{color:
 h1{font-size:30px;line-height:1.15;margin:0 0 16px}h2{font-size:18px;line-height:1.25;margin:0 0 12px}.eyebrow{margin:0 0 6px;color:var(--accent);font-size:12px;font-weight:800;letter-spacing:0;text-transform:uppercase}
 .panel{background:rgba(255,255,255,.96);border:1px solid var(--line);border-radius:12px;padding:20px;box-shadow:0 1px 0 rgba(22,33,43,.02)}
 .primary-panel{border-color:#bfd9ce;background:linear-gradient(180deg,#fff,#fbfdfc)}
-.create-room-band{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,.7fr);gap:16px;align-items:center;border:1px solid #c8dbd2;background:#f8fcfa;border-radius:12px;padding:18px;margin-bottom:16px}.create-room-band h2{margin-bottom:4px}.create-room-form{display:grid;grid-template-columns:1fr minmax(150px,.35fr) auto;gap:10px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-.dash-home-hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,.55fr);gap:18px;align-items:center;margin-bottom:16px;border:1px solid #cfded6;border-radius:18px;padding:24px;background:linear-gradient(135deg,#10251f,#176b52 58%,#e8c46d);color:#fff;box-shadow:0 18px 60px rgba(20,33,29,.12)}.dash-home-hero.learner{grid-template-columns:1fr;background:linear-gradient(135deg,#10251f,#315f87)}.dash-home-hero .eyebrow,.dash-home-hero .muted{color:#d9eee6}.dash-home-hero h1{font-size:40px;margin-bottom:8px}.create-room-form.compact input{background:rgba(255,255,255,.96)}.mentor-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px}.mentor-summary div{min-height:104px;border:1px solid var(--line);border-radius:16px;background:#fff;padding:16px;box-shadow:0 1px 0 rgba(20,33,29,.03)}.mentor-summary span{display:block;color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase}.mentor-summary strong{display:block;font-size:36px;line-height:1;margin-top:18px}.learner-summary div:nth-child(4) strong{color:var(--danger)}.home-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(320px,.85fr);gap:16px;margin-bottom:16px}.attention-row{display:grid;grid-template-columns:92px 1fr;gap:12px;align-items:start;border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:10px;color:var(--text);background:#fff}.attention-row:hover{text-decoration:none;box-shadow:var(--shadow)}.attention-kind{display:inline-flex;justify-content:center;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:900;text-transform:uppercase;background:#eef4f1;color:var(--accent)}.attention-row.overdue .attention-kind{background:#fff1f0;color:var(--danger)}.attention-row.blocker .attention-kind{background:#fff7e8;color:var(--warn)}.attention-row p{margin:4px 0 0;color:var(--muted)}.mini-room-list{display:grid;gap:10px}.mini-room-list a{display:flex;justify-content:space-between;gap:12px;border:1px solid var(--line);border-radius:12px;padding:12px;color:var(--text);background:#fff}.mini-room-list a:hover{text-decoration:none;border-color:#a9cabb}.mini-room-list span{color:var(--muted)}.progress-table{display:grid}.progress-head,.progress-row{display:grid;grid-template-columns:minmax(180px,1.4fr) minmax(120px,1fr) minmax(170px,1fr) minmax(130px,.9fr) 110px;gap:12px;align-items:center}.progress-head{padding:8px;color:var(--muted);font-size:12px;font-weight:900;text-transform:uppercase}.progress-row{padding:12px 8px;border-top:1px solid var(--line);color:var(--text)}.progress-row:hover{text-decoration:none;background:#fbfcfb}.progress-row small{display:block;color:var(--muted)}.status-pill{display:inline-flex;justify-content:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:900;background:#eef4f1;color:var(--accent)}.status-pill.overdue{background:#fff1f0;color:var(--danger)}.status-pill.blocked{background:#fff7e8;color:var(--warn)}.status-pill.quiet{background:#f3f5f8;color:#657282}
+.create-room-band{display:grid;grid-template-columns:minmax(0,1fr) minmax(360px,.9fr);gap:16px;align-items:center;border:1px solid #c8dbd2;background:#f8fcfa;border-radius:12px;padding:18px;margin-bottom:16px}.create-room-band h2{margin-bottom:4px}.create-room-form{display:grid;grid-template-columns:minmax(220px,1.6fr) minmax(150px,1fr) auto;gap:10px;align-items:center}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.dash-home-hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,.55fr);gap:18px;align-items:center;margin-bottom:16px;border:1px solid #cfded6;border-radius:18px;padding:24px;background:linear-gradient(135deg,#10251f,#176b52 58%,#e8c46d);color:#fff;box-shadow:0 18px 60px rgba(20,33,29,.12)}.dash-home-hero.learner,.dash-home-hero.solo{grid-template-columns:1fr}.dash-home-hero.learner{background:linear-gradient(135deg,#10251f,#315f87)}.dash-home-hero .eyebrow,.dash-home-hero .muted{color:#d9eee6}.dash-home-hero h1{font-size:40px;margin-bottom:8px}.create-room-form.compact input{background:rgba(255,255,255,.96)}.mentor-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px}.mentor-summary div{min-height:104px;border:1px solid var(--line);border-radius:16px;background:#fff;padding:16px;box-shadow:0 1px 0 rgba(20,33,29,.03)}.mentor-summary span{display:block;color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase}.mentor-summary strong{display:block;font-size:36px;line-height:1;margin-top:18px}.learner-summary div:nth-child(4) strong{color:var(--danger)}.home-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(320px,.85fr);gap:16px;margin-bottom:16px}.attention-row{display:grid;grid-template-columns:92px 1fr;gap:12px;align-items:start;border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:10px;color:var(--text);background:#fff}.attention-row:hover{text-decoration:none;box-shadow:var(--shadow)}.attention-kind{display:inline-flex;justify-content:center;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:900;text-transform:uppercase;background:#eef4f1;color:var(--accent)}.attention-row.overdue .attention-kind{background:#fff1f0;color:var(--danger)}.attention-row.blocker .attention-kind{background:#fff7e8;color:var(--warn)}.attention-row p{margin:4px 0 0;color:var(--muted)}.mini-room-list{display:grid;gap:10px}.mini-room-list a{display:flex;justify-content:space-between;gap:12px;border:1px solid var(--line);border-radius:12px;padding:12px;color:var(--text);background:#fff}.mini-room-list a:hover{text-decoration:none;border-color:#a9cabb}.mini-room-list span{color:var(--muted)}.progress-table{display:grid}.progress-head,.progress-row{display:grid;grid-template-columns:minmax(180px,1.4fr) minmax(120px,1fr) minmax(170px,1fr) minmax(130px,.9fr) 110px;gap:12px;align-items:center}.progress-head{padding:8px;color:var(--muted);font-size:12px;font-weight:900;text-transform:uppercase}.progress-row{padding:12px 8px;border-top:1px solid var(--line);color:var(--text)}.progress-row:hover{text-decoration:none;background:#fbfcfb}.progress-row small{display:block;color:var(--muted)}.status-pill{display:inline-flex;justify-content:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:900;background:#eef4f1;color:var(--accent)}.status-pill.overdue{background:#fff1f0;color:var(--danger)}.status-pill.blocked{background:#fff7e8;color:var(--warn)}.status-pill.quiet{background:#f3f5f8;color:#657282}
 .room-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}.room-card{display:grid;gap:16px;min-height:120px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;color:var(--text);box-shadow:0 1px 0 rgba(22,33,43,.02)}
 .room-card:hover{border-color:#a9cabb;text-decoration:none;box-shadow:var(--shadow)}.room-card-title{font-size:18px;font-weight:800}.room-card-meta{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--muted);font-size:13px}
 .dashboard-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(340px,.85fr);gap:18px;margin-bottom:18px}.mentor-room-grid{grid-template-columns:minmax(0,1.25fr) minmax(340px,.75fr)}.mentor-tools{display:grid;grid-template-columns:minmax(260px,.8fr) minmax(320px,1.2fr);gap:16px;margin-bottom:16px}
@@ -47,3 +47,92 @@ input:focus,textarea:focus,select:focus{outline:3px solid rgba(23,107,82,.16);bo
 .help-steps{padding-left:22px;line-height:1.7}
 .help-steps li{margin:6px 0}
 .member-pill{display:flex;justify-content:space-between;gap:12px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff}.member-pill span{color:var(--muted)}
+
+/* === UI polish + mobile hardening === */
+
+/* Checkboxes were stretching from the global input{width:100%} rule. */
+input[type="checkbox"],input[type="radio"]{width:auto;flex:0 0 auto;margin:0}
+.checkbox-row{align-items:flex-start}
+.checkbox-row input[type="checkbox"]{margin-top:4px}
+.checkbox-row span{flex:1;line-height:1.4}
+
+/* Buttons inside stacked forms should sit at natural width, not stretch
+   across the grid cell. The "Save settings" button rendered as a giant
+   slab because the form is display:grid. */
+form.stack > button{justify-self:start;min-width:140px}
+
+/* The "Invite" form needs to be a proper inline row: select sized to
+   content, button next to it. Previously .inline had no styling so the
+   select inherited width:100% from the global input,textarea,select rule. */
+form.inline{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+form.inline select{width:auto;min-width:140px}
+form.inline button{flex:0 0 auto}
+
+/* Role pill in member-row was stretching to fill its grid cell. */
+.member-row .pill{justify-self:start}
+
+/* "Your score" panel: two compact cards, not the 5-col mentor-summary. */
+.score-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:12px}
+.score-grid div{min-height:96px;border:1px solid var(--line);border-radius:14px;background:#fff;padding:14px}
+.score-grid span{display:block;color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase}
+.score-grid strong{display:block;font-size:32px;line-height:1;margin-top:14px}
+.score-grid strong small{font-size:14px;color:var(--muted);font-weight:600}
+
+/* Review-form readability: stack vertically so feedback gets a real row,
+   instead of being squished into a narrow third column. */
+.review-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:10px}
+.review-form textarea{grid-column:1 / -1;min-height:64px}
+.review-form button{grid-column:1 / -1;justify-self:start;min-width:160px}
+
+/* Mobile hardening: anything we haven't already handled. */
+@media (max-width:640px){
+  h1{font-size:26px}
+  .auth-card{padding:18px}
+  .topbar{flex-wrap:wrap;padding:10px 14px;height:auto;gap:8px}
+  .topbar nav{flex-wrap:wrap;gap:10px}
+  .score-grid{grid-template-columns:1fr 1fr}
+  .leaderboard li{grid-template-columns:42px 1fr auto;padding:8px 10px}
+  .rubric{gap:6px}
+  .rubric button{padding:5px 10px}
+  .mentor-summary{grid-template-columns:1fr 1fr}
+  .mentor-summary div{min-height:78px;padding:12px}
+  .mentor-summary strong{font-size:26px;margin-top:8px}
+  .stat-card{min-height:88px}
+  .stat-card strong{font-size:28px;left:12px;bottom:10px}
+  .task-update{grid-template-columns:1fr}
+  .member-avatar{width:28px;height:28px}
+}
+
+/* === Button primitives + form layout sanity === */
+
+/* Buttons should never word-wrap their label inside a tight grid cell.
+   The "Create room" button was rendering as "Create / room" because the
+   grid auto column shrank below content width. */
+button{white-space:nowrap;line-height:1.2}
+.button{white-space:nowrap}
+
+/* A size scale so we don't ad-hoc tweak padding per place. */
+button.btn-sm,.btn-sm{padding:6px 10px;font-size:13px;min-width:0}
+button.btn-md,.btn-md{padding:10px 14px}
+button.btn-lg,.btn-lg{padding:12px 18px;font-size:15px}
+
+/* The create-room band's form needs the input to be the dominant column.
+   Give the button enough room and align everything to the baseline. */
+.create-room-form{grid-template-columns:minmax(240px,2fr) minmax(150px,1fr) max-content}
+.create-room-form button{align-self:stretch}
+
+/* Inputs inside an inline form sit at content width, not 100%. */
+form.inline input[type="text"],form.inline input:not([type]){width:auto}
+
+/* === Override: create-room-band + form layout v2 ===
+   Earlier rules used a rigid 3-col grid that overflowed when the band's
+   right column was narrower than the form's minimum content width. Flex
+   with wrap is robust: items shrink, items wrap, nothing overflows. */
+.create-room-band{display:grid;grid-template-columns:1fr;gap:16px;align-items:start}
+@media (min-width:1024px){
+  .create-room-band{grid-template-columns:minmax(0,1fr) minmax(440px,1.1fr);align-items:center}
+}
+.create-room-form{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;grid-template-columns:none}
+.create-room-form input[name="name"]{flex:1 1 220px;min-width:0;width:auto}
+.create-room-form select{flex:0 0 160px;width:auto}
+.create-room-form button{flex:0 0 auto;min-width:140px}
