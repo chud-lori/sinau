@@ -64,6 +64,24 @@ func joinLearner(t *testing.T, st *Store, code, name, email string) (string, str
 	return uid, roomID
 }
 
+func TestInitialSetupOnlyRunsOnce(t *testing.T) {
+	st := newTestStore(t)
+	hash, err := auth.HashPassword("verysecurepass123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateInitialRoom("Mentor", "mentor@example.com", hash, "Backend"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.CreateInitialRoom("Other", "other@example.com", hash, "Frontend")
+	if err != ErrSetupComplete {
+		t.Fatalf("expected ErrSetupComplete, got %v", err)
+	}
+	if got := st.UserCount(); got != 1 {
+		t.Fatalf("expected single user after blocked second setup, got %d", got)
+	}
+}
+
 func TestInviteCanOnlyBeUsedOnce(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
@@ -133,6 +151,77 @@ func TestMentorCanCreateMultipleRooms(t *testing.T) {
 	}
 	if !st.IsMentor(mentorID) {
 		t.Fatal("mentor should be able to create rooms")
+	}
+}
+
+func TestCreateTaskForLearnersAssignsEveryLearnerOnce(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
+	codeA := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
+	codeB := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
+	learnerA, _ := joinLearner(t, st, codeA, "Learner A", "a@example.com")
+	learnerB, _ := joinLearner(t, st, codeB, "Learner B", "b@example.com")
+
+	count, err := st.CreateTaskForLearners(roomID, mentorID, "Read RFC", "details", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 tasks created, got %d", count)
+	}
+
+	tasksA, err := st.Tasks(roomID, learnerA, domain.RoleLearner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasksB, err := st.Tasks(roomID, learnerB, domain.RoleLearner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasksA) != 1 || len(tasksB) != 1 {
+		t.Fatalf("expected exactly one task per learner, got A=%d B=%d", len(tasksA), len(tasksB))
+	}
+	if tasksA[0].ID == tasksB[0].ID {
+		t.Fatal("bulk assign produced shared task ID across learners")
+	}
+
+	// Mentor is not a learner: bulk should never assign to mentor.
+	mentorTasks, err := st.Tasks(roomID, mentorID, domain.RoleMentor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tk := range mentorTasks {
+		if tk.Assignee == "Mentor" {
+			t.Fatalf("mentor received a task from bulk assign: %+v", tk)
+		}
+	}
+}
+
+func TestCreateTaskForLearnersIsZeroWhenNoLearners(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
+	count, err := st.CreateTaskForLearners(roomID, mentorID, "Read RFC", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 tasks in mentor-only room, got %d", count)
+	}
+}
+
+func TestIsLearnerRejectsMentorsAndOutsiders(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
+	if st.IsLearner(roomID, mentorID) {
+		t.Fatal("mentor incorrectly classified as learner")
+	}
+	if st.IsLearner(roomID, "non-existent-user") {
+		t.Fatal("non-member classified as learner")
+	}
+	code := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
+	learnerID, _ := joinLearner(t, st, code, "Learner", "learner@example.com")
+	if !st.IsLearner(roomID, learnerID) {
+		t.Fatal("learner not recognised by IsLearner")
 	}
 }
 

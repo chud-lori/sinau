@@ -30,12 +30,16 @@ Environment:
 - `SINAU_REMINDERS`, set `false` to disable deadline reminder worker
 - `SINAU_REMINDER_INTERVAL`, default `1h`
 - `SINAU_REMINDER_WINDOW`, default `24h`
+- `SINAU_NOTIFIER`, reminder delivery channel, default `log`. Real channels
+  (email, WhatsApp, etc.) are not implemented yet — see
+  `cmd/sinau/main.go:buildNotifier` and `internal/reminder/reminder.go` for
+  the extension seam.
 
 Deployment notes are in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Code Layout
 
-- `cmd/sinau`: binary entry point and configuration wiring
+- `cmd/sinau`: binary entry point, env-var config, reminder notifier selection
 - `internal/auth`: password hashing, tokens, validation helpers
 - `internal/domain`: shared domain structs and role constants
 - `internal/store`: SQLite migrations, queries, and persistence rules

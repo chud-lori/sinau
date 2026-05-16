@@ -85,6 +85,7 @@ SINAU_SECURE_COOKIE=true
 SINAU_REMINDERS=true
 SINAU_REMINDER_INTERVAL=1h
 SINAU_REMINDER_WINDOW=24h
+SINAU_NOTIFIER=log
 ```
 
 Lock it down:
@@ -277,7 +278,15 @@ Controls:
 SINAU_REMINDERS=true
 SINAU_REMINDER_INTERVAL=1h
 SINAU_REMINDER_WINDOW=24h
+SINAU_NOTIFIER=log
 ```
+
+`SINAU_NOTIFIER` selects the delivery channel. Only `log` is implemented
+today. To plug in email, WhatsApp, Telegram, or Discord, add a new
+`reminder.Notifier` implementation and a case in `buildNotifier` in
+`cmd/sinau/main.go`. Multiple channels can be fanned out via
+`reminder.MultiNotifier`. The deadline scan, dedup window
+(`last_reminded_at`), and task storage do not change.
 
 Disable reminders:
 

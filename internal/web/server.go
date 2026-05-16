@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"crypto/subtle"
 	"html/template"
 	"log"
 	"net/http"
@@ -18,6 +19,8 @@ type Server struct {
 	tpl          *template.Template
 	secureCookie bool
 	staticDir    string
+	dummyHash    string
+	authLimiter  *limiter
 }
 
 type Config struct {
@@ -36,7 +39,6 @@ type PageData struct {
 	User          *domain.User
 	CSRF          string
 	Error         string
-	Notice        string
 	SetupNeeded   bool
 	Rooms         []domain.Room
 	Room          domain.Room
@@ -49,7 +51,7 @@ type PageData struct {
 	InviteCode    string
 	JoinCode      string
 	Stats         domain.Stats
-	CanCreateRoom bool
+	RoomLearners  []domain.Member
 	MentorDash    domain.MentorDashboard
 	LearnerDash   domain.LearnerDashboard
 }
@@ -59,11 +61,17 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	dummy, err := auth.HashPassword("sinau-login-timing-equalisation-only")
+	if err != nil {
+		return nil, err
+	}
 	return &Server{
 		store:        cfg.Store,
 		tpl:          tpl,
 		secureCookie: cfg.SecureCookie,
 		staticDir:    cfg.StaticDir,
+		dummyHash:    dummy,
+		authLimiter:  newLimiter(0.2, 8),
 	}, nil
 }
 
@@ -72,12 +80,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(s.staticDir))))
 	mux.HandleFunc("GET /", s.withUser(s.home))
 	mux.HandleFunc("GET /setup", s.withUser(s.setupForm))
-	mux.HandleFunc("POST /setup", s.setup)
+	mux.HandleFunc("POST /setup", s.rateLimit(s.setup))
 	mux.HandleFunc("GET /login", s.withUser(s.loginForm))
-	mux.HandleFunc("POST /login", s.login)
+	mux.HandleFunc("POST /login", s.rateLimit(s.login))
 	mux.HandleFunc("POST /logout", s.auth(s.logout))
 	mux.HandleFunc("GET /join", s.withUser(s.joinForm))
-	mux.HandleFunc("POST /join", s.join)
+	mux.HandleFunc("POST /join", s.rateLimit(s.join))
 	mux.HandleFunc("POST /rooms", s.auth(s.createRoom))
 	mux.HandleFunc("GET /rooms/{roomID}", s.auth(s.roomPage))
 	mux.HandleFunc("POST /rooms/{roomID}/invites", s.auth(s.createInvite))
@@ -145,7 +153,22 @@ func (s *Server) csrfFor(r *http.Request) string {
 }
 
 func (s *Server) validCSRF(r *http.Request) bool {
-	return r.FormValue("csrf") != "" && r.FormValue("csrf") == s.csrfFor(r)
+	got := r.FormValue("csrf")
+	want := s.csrfFor(r)
+	if got == "" || want == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func (s *Server) rateLimit(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.authLimiter.allow(clientIP(r)) {
+			http.Error(w, "too many requests, slow down", http.StatusTooManyRequests)
+			return
+		}
+		next(w, r)
+	}
 }
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +183,7 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 			s.serverError(w, err)
 			return
 		}
-		s.render(w, "mentor_home", PageData{Title: "Mentor Dashboard", User: u, CSRF: s.csrfFor(r), Rooms: dash.Rooms, CanCreateRoom: true, MentorDash: dash})
+		s.render(w, "mentor_home", PageData{Title: "Mentor Dashboard", User: u, CSRF: s.csrfFor(r), Rooms: dash.Rooms, MentorDash: dash})
 		return
 	}
 	dash, err := s.store.LearnerDashboard(u.ID)
@@ -198,6 +221,10 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uid, err := s.store.CreateInitialRoom(name, email, hash, roomName)
+	if err == store.ErrSetupComplete {
+		http.Error(w, "setup already completed", http.StatusForbidden)
+		return
+	}
 	if err != nil {
 		s.serverError(w, err)
 		return
@@ -220,9 +247,15 @@ func (s *Server) loginForm(w http.ResponseWriter, r *http.Request) {
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(auth.Clean(r.FormValue("email"), 160))
 	password := r.FormValue("password")
-	uid, hash, err := s.store.UserPasswordByEmail(email)
-	if err != nil || !auth.VerifyPassword(password, hash) {
-		time.Sleep(300 * time.Millisecond)
+	uid, hash, lookupErr := s.store.UserPasswordByEmail(email)
+	// Always run argon2 verify against a real hash so timing does not
+	// distinguish "no such user" from "wrong password".
+	verifyAgainst := hash
+	if lookupErr != nil {
+		verifyAgainst = s.dummyHash
+	}
+	ok := auth.VerifyPassword(password, verifyAgainst)
+	if lookupErr != nil || !ok {
 		s.render(w, "login", PageData{Title: "Login", Error: "Invalid email or password."})
 		return
 	}
@@ -309,7 +342,13 @@ func (s *Server) roomPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rm.Role = role
-	s.render(w, "room", PageData{Title: rm.Name, User: u, CSRF: s.csrfFor(r), Room: rm, Members: data.Members, Reports: data.Reports, Tasks: data.Tasks, Invites: data.Invites, Stats: data.Stats})
+	learners := make([]domain.Member, 0, len(data.Members))
+	for _, m := range data.Members {
+		if m.Role == domain.RoleLearner {
+			learners = append(learners, m)
+		}
+	}
+	s.render(w, "room", PageData{Title: rm.Name, User: u, CSRF: s.csrfFor(r), Room: rm, Members: data.Members, RoomLearners: learners, Reports: data.Reports, Tasks: data.Tasks, Invites: data.Invites, Stats: data.Stats})
 }
 
 func (s *Server) createInvite(w http.ResponseWriter, r *http.Request) {
@@ -415,6 +454,11 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/rooms/"+roomID+"/reports/"+reportID, http.StatusSeeOther)
 }
 
+// assignAllSentinel is the form value used to mean "create one task per
+// learner in this room". It is intentionally not a valid 32-char hex user
+// ID so it can never collide with a real assignee.
+const assignAllSentinel = "all"
+
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	u := current(r)
 	roomID := r.PathValue("roomID")
@@ -424,10 +468,6 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	assignedTo := r.FormValue("assigned_to")
-	if !s.store.IsMember(roomID, assignedTo) {
-		http.Error(w, "unknown assignee", http.StatusBadRequest)
-		return
-	}
 	title := auth.Clean(r.FormValue("title"), 180)
 	detail := auth.Clean(r.FormValue("detail"), 1200)
 	dueDate := auth.Clean(r.FormValue("due_date"), 10)
@@ -441,9 +481,25 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.store.CreateTask(roomID, assignedTo, u.ID, title, detail, dueDate); err != nil {
-		s.serverError(w, err)
-		return
+	if assignedTo == assignAllSentinel {
+		count, err := s.store.CreateTaskForLearners(roomID, u.ID, title, detail, dueDate)
+		if err != nil {
+			s.serverError(w, err)
+			return
+		}
+		if count == 0 {
+			http.Error(w, "no learners in this room to assign", http.StatusBadRequest)
+			return
+		}
+	} else {
+		if !s.store.IsLearner(roomID, assignedTo) {
+			http.Error(w, "assignee must be a learner in this room", http.StatusBadRequest)
+			return
+		}
+		if err := s.store.CreateTask(roomID, assignedTo, u.ID, title, detail, dueDate); err != nil {
+			s.serverError(w, err)
+			return
+		}
 	}
 	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
 }

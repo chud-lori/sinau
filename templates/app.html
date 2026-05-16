@@ -31,7 +31,6 @@
 </header>
 <main class="shell">
 {{if .Error}}<p class="alert error">{{.Error}}</p>{{end}}
-{{if .Notice}}<p class="alert">{{.Notice}}</p>{{end}}
 {{end}}
 
 {{define "layout_end"}}</main></body></html>{{end}}
@@ -132,42 +131,6 @@
     <button type="submit">Create account</button>
   </form>
 </section>
-{{template "layout_end" .}}{{end}}
-
-{{define "home"}}{{template "layout_start" .}}
-<div class="page-title">
-  <div>
-    <p class="eyebrow">Workspace</p>
-    <h1>Rooms</h1>
-  </div>
-</div>
-{{if .CanCreateRoom}}
-<section class="create-room-band">
-  <div>
-    <h2>Create another room</h2>
-    <p class="muted">Use separate rooms for cohorts, topics, teams, or learning tracks.</p>
-  </div>
-  <form method="post" action="/rooms" class="create-room-form">
-    <input type="hidden" name="csrf" value="{{.CSRF}}">
-    <label class="sr-only">Room name</label>
-    <input name="name" required placeholder="Frontend cohort">
-    <button type="submit">Create room</button>
-  </form>
-</section>
-{{end}}
-<div class="room-grid">
-{{range .Rooms}}
-  <a class="room-card" href="/rooms/{{.ID}}">
-    <span class="room-card-title">{{.Name}}</span>
-    <span class="room-card-meta"><span class="pill">{{.Role}}</span><span>{{.CreatedAt}}</span></span>
-  </a>
-{{else}}
-  <section class="empty-state">
-    <h2>No rooms yet</h2>
-    <p class="muted">Ask a mentor for an invite link, or run setup if this is a fresh install.</p>
-  </section>
-{{end}}
-</div>
 {{template "layout_end" .}}{{end}}
 
 {{define "mentor_home"}}{{template "layout_start" .}}
@@ -470,11 +433,13 @@
         <h2>Assign Task</h2>
       </div>
     </div>
+    {{if .RoomLearners}}
     <form method="post" action="/rooms/{{.Room.ID}}/tasks" class="stack">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <label>Assignee
-        <select name="assigned_to">
-          {{range .Members}}<option value="{{.UserID}}">{{.Name}} - {{.Role}}</option>{{end}}
+        <select name="assigned_to" required>
+          <option value="all">All learners ({{len .RoomLearners}})</option>
+          {{range .RoomLearners}}<option value="{{.UserID}}">{{.Name}}</option>{{end}}
         </select>
       </label>
       <label>Title <input name="title" required></label>
@@ -482,6 +447,9 @@
       <label>Deadline <input name="due_date" type="date"></label>
       <button type="submit">Assign</button>
     </form>
+    {{else}}
+    <p class="muted">Invite a learner to this room before assigning tasks.</p>
+    {{end}}
   </section>
 </div>
 

@@ -23,11 +23,15 @@ type InviteClaim struct {
 	UsedAt    string
 }
 
+var ErrSetupComplete = errors.New("setup already completed")
+
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	s := &Store{db: db}
 	if err := s.Migrate(); err != nil {
 		_ = db.Close()
@@ -182,8 +186,13 @@ func (s *Store) CreateInitialRoom(name, email, passwordHash, roomName string) (s
 		return "", err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`INSERT INTO users(id,name,email,password_hash,created_at) VALUES(?,?,?,?,?)`, uid, name, email, passwordHash, now); err != nil {
+	res, err := tx.Exec(`INSERT INTO users(id,name,email,password_hash,created_at)
+		SELECT ?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM users)`, uid, name, email, passwordHash, now)
+	if err != nil {
 		return "", err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return "", ErrSetupComplete
 	}
 	if _, err = tx.Exec(`INSERT INTO rooms(id,name,created_by,created_at) VALUES(?,?,?,?)`, rid, roomName, uid, now); err != nil {
 		return "", err
@@ -322,7 +331,12 @@ func (s *Store) mentorSummary(userID string) (domain.DashboardSummary, error) {
 	}{
 		{&out.Rooms, `SELECT COUNT(*) FROM memberships WHERE user_id = ? AND role = 'mentor'`},
 		{&out.ActiveLearners, `SELECT COUNT(DISTINCT ml.user_id) FROM memberships mr JOIN memberships ml ON ml.room_id = mr.room_id AND ml.role = 'learner' WHERE mr.user_id = ? AND mr.role = 'mentor'`},
-		{&out.WaitingFeedback, `SELECT COUNT(*) FROM memberships mr JOIN reports rp ON rp.room_id = mr.room_id LEFT JOIN comments c ON c.report_id = rp.id WHERE mr.user_id = ? AND mr.role = 'mentor' GROUP BY rp.id HAVING COUNT(c.id) = 0`},
+		{&out.WaitingFeedback, `SELECT COUNT(*) FROM (
+			SELECT rp.id FROM memberships mr
+			JOIN reports rp ON rp.room_id = mr.room_id
+			LEFT JOIN comments c ON c.report_id = rp.id
+			WHERE mr.user_id = ? AND mr.role = 'mentor'
+			GROUP BY rp.id HAVING COUNT(c.id) = 0)`},
 		{&out.Blockers, `SELECT COUNT(*) FROM memberships mr JOIN reports rp ON rp.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND rp.blocker != ''`},
 		{&out.OpenTasks, `SELECT COUNT(*) FROM memberships mr JOIN tasks t ON t.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done'`},
 		{&out.DueSoonTasks, `SELECT COUNT(*) FROM memberships mr JOIN tasks t ON t.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done' AND t.due_date != '' AND t.due_date >= date('now') AND t.due_date <= date('now', '+2 day')`},
@@ -330,21 +344,6 @@ func (s *Store) mentorSummary(userID string) (domain.DashboardSummary, error) {
 		{&out.ReportsThisWeek, `SELECT COUNT(*) FROM memberships mr JOIN reports rp ON rp.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND rp.created_at >= datetime('now', '-7 day')`},
 	}
 	for _, q := range queries {
-		if q.dst == &out.WaitingFeedback {
-			rows, err := s.db.Query(q.sql, userID)
-			if err != nil {
-				return out, err
-			}
-			for rows.Next() {
-				out.WaitingFeedback++
-			}
-			if err := rows.Err(); err != nil {
-				_ = rows.Close()
-				return out, err
-			}
-			_ = rows.Close()
-			continue
-		}
 		if err := s.db.QueryRow(q.sql, userID).Scan(q.dst); err != nil {
 			return out, err
 		}
@@ -425,7 +424,8 @@ func learnerStatus(lp domain.LearnerProgress) string {
 }
 
 func (s *Store) mentorAttention(userID string) ([]domain.AttentionItem, error) {
-	rows, err := s.db.Query(`SELECT 'overdue', r.id, r.name, u.id, u.name, t.title, t.detail, t.due_date, t.created_at
+	rows, err := s.db.Query(`SELECT 'overdue' AS kind, r.id AS room_id, r.name AS room_name, u.id AS user_id, u.name AS user_name,
+			t.title AS title, t.detail AS detail, t.due_date AS due_date, t.created_at AS sort_at
 		FROM memberships mr
 		JOIN tasks t ON t.room_id = mr.room_id
 		JOIN rooms r ON r.id = t.room_id
@@ -448,7 +448,7 @@ func (s *Store) mentorAttention(userID string) ([]domain.AttentionItem, error) {
 		WHERE mr.user_id = ? AND mr.role = 'mentor'
 		GROUP BY rp.id
 		HAVING COUNT(c.id) = 0
-		ORDER BY 9 DESC
+		ORDER BY sort_at DESC
 		LIMIT 12`, userID, userID, userID)
 	if err != nil {
 		return nil, err
@@ -523,10 +523,36 @@ func (s *Store) RoomAccess(roomID, userID string) (domain.Room, string, bool) {
 	return rm, role, err == nil
 }
 
-func (s *Store) IsMember(roomID, userID string) bool {
+// IsLearner reports whether userID is enrolled in roomID specifically as a
+// learner. Tasks are only assignable to learners, so mentor-only checks like
+// "is this person in the room" are insufficient.
+func (s *Store) IsLearner(roomID, userID string) bool {
 	var n int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM memberships WHERE room_id = ? AND user_id = ?`, roomID, userID).Scan(&n)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM memberships WHERE room_id = ? AND user_id = ? AND role = ?`,
+		roomID, userID, domain.RoleLearner).Scan(&n)
 	return n == 1
+}
+
+// LearnerIDs returns every learner user_id in the room, ordered by name for
+// stable display. Used by the "assign task to all learners" flow.
+func (s *Store) LearnerIDs(roomID string) ([]string, error) {
+	rows, err := s.db.Query(`SELECT m.user_id FROM memberships m
+		JOIN users u ON u.id = m.user_id
+		WHERE m.room_id = ? AND m.role = ?
+		ORDER BY u.name`, roomID, domain.RoleLearner)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func (s *Store) CreateInvite(roomID, role, createdBy, code string, expires time.Time) error {
@@ -756,6 +782,45 @@ func (s *Store) CreateTask(roomID, assignedTo, assignedBy, title, detail, dueDat
 	_, err = s.db.Exec(`INSERT INTO tasks(id,room_id,assigned_to,assigned_by,title,detail,status,due_date,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?)`, id, roomID, assignedTo, assignedBy, title, detail, "todo", dueDate, n, n)
 	return err
+}
+
+// CreateTaskForLearners inserts one task per current learner in the room
+// inside a single transaction, so either every learner gets the task or none
+// do. Returns the number of tasks created (zero if the room has no
+// learners).
+func (s *Store) CreateTaskForLearners(roomID, assignedBy, title, detail, dueDate string) (int, error) {
+	learnerIDs, err := s.LearnerIDs(roomID)
+	if err != nil {
+		return 0, err
+	}
+	if len(learnerIDs) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`INSERT INTO tasks(id,room_id,assigned_to,assigned_by,title,detail,status,due_date,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?)`)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+	now := auth.Now()
+	for _, learnerID := range learnerIDs {
+		id, err := auth.NewID()
+		if err != nil {
+			return 0, err
+		}
+		if _, err := stmt.Exec(id, roomID, learnerID, assignedBy, title, detail, "todo", dueDate, now, now); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(learnerIDs), nil
 }
 
 func (s *Store) UpdateTaskStatus(roomID, taskID, userID, role, status string) (bool, error) {
