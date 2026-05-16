@@ -222,7 +222,7 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		s.render(w, "landing", PageData{Title: "Mentor-led learning rooms", SetupNeeded: s.store.UserCount() == 0})
 		return
 	}
-	if s.store.IsMentor(u.ID) {
+	if s.store.CanCreateRooms(u.ID) || s.store.IsMentor(u.ID) {
 		dash, err := s.store.MentorDashboard(u.ID)
 		if err != nil {
 			s.serverError(w, err)
@@ -265,10 +265,8 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	name := auth.Clean(r.FormValue("name"), 80)
 	email := strings.ToLower(auth.Clean(r.FormValue("email"), 160))
 	password := r.FormValue("password")
-	roomName := auth.Clean(r.FormValue("room_name"), 100)
-	roomMode := auth.Clean(r.FormValue("room_mode"), 40)
-	if name == "" || !auth.ValidEmail(email) || len(password) < 12 || roomName == "" {
-		s.render(w, "setup", PageData{Title: "Setup", Error: "Use a name, valid email, room name, and password with at least 12 characters."})
+	if name == "" || !auth.ValidEmail(email) || len(password) < 12 {
+		s.render(w, "setup", PageData{Title: "Setup", Error: "Use a name, valid email, and password with at least 12 characters."})
 		return
 	}
 	hash, err := auth.HashPassword(password)
@@ -276,7 +274,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
-	uid, err := s.store.CreateInitialRoom(name, email, hash, roomName, roomMode)
+	uid, err := s.store.CreateInitialRoomCreator(name, email, hash)
 	if err == store.ErrSetupComplete {
 		http.Error(w, "setup already completed", http.StatusForbidden)
 		return
@@ -367,7 +365,7 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 	u := current(r)
-	if !s.store.IsMentor(u.ID) {
+	if !s.store.CanCreateRooms(u.ID) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}

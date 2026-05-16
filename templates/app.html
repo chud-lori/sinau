@@ -92,22 +92,14 @@
 <section class="auth-card">
   <div class="auth-copy">
     <p class="eyebrow">Private learning rooms</p>
-    <h1>Set Up First Room</h1>
-    <p class="muted">Create the first mentor account and bootstrap one starting room. This format applies only to the first room; after setup you can create more rooms in either format.</p>
+    <h1>Set Up Mentor Account</h1>
+    <p class="muted">Create the first mentor account. After setup, create a room and choose the workflow that fits it.</p>
   </div>
   <form method="post" action="/setup" class="stack">
     <label>Name <input name="name" required autocomplete="name"></label>
     <label>Email <input name="email" type="email" required autocomplete="email"></label>
     <label>Password <input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
-    <label>Room name <input name="room_name" required placeholder="Backend cohort"></label>
-    <label>First room format
-      <select name="room_mode">
-        <option value="mentorship">Mentorship - reports, blockers, next tasks</option>
-        <option value="classroom">Classroom - assignments, submissions, review</option>
-      </select>
-    </label>
-    <p class="muted">Your mentor account is not tied to this choice. Each new room can be Mentorship or Classroom.</p>
-    <button type="submit">Create mentor account and first room</button>
+    <button type="submit">Create mentor account</button>
   </form>
 </section>
 {{template "layout_end" .}}{{end}}

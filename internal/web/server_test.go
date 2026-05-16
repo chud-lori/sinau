@@ -93,7 +93,6 @@ func TestAuthenticatedPostRequiresCSRF(t *testing.T) {
 	form.Set("name", "Mentor")
 	form.Set("email", "mentor@example.com")
 	form.Set("password", "verysecurepass123")
-	form.Set("room_name", "Backend")
 	setupReq := httptest.NewRequest(http.MethodPost, "/setup", strings.NewReader(form.Encode()))
 	setupReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	setupRR := httptest.NewRecorder()
@@ -106,36 +105,16 @@ func TestAuthenticatedPostRequiresCSRF(t *testing.T) {
 		t.Fatal("setup did not issue session cookie")
 	}
 
-	homeReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	roomForm := url.Values{}
+	roomForm.Set("name", "Backend")
+	roomReq := httptest.NewRequest(http.MethodPost, "/rooms", strings.NewReader(roomForm.Encode()))
+	roomReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	for _, c := range cookies {
-		homeReq.AddCookie(c)
+		roomReq.AddCookie(c)
 	}
-	homeRR := httptest.NewRecorder()
-	handler.ServeHTTP(homeRR, homeReq)
-	body := homeRR.Body.String()
-	start := strings.Index(body, `/rooms/`)
-	if start == -1 {
-		t.Fatalf("room link not found in home: %s", body)
-	}
-	rest := body[start+len(`/rooms/`):]
-	end := strings.Index(rest, `"`)
-	if end == -1 {
-		t.Fatal("room id parse failed")
-	}
-	roomID := rest[:end]
-
-	reportForm := url.Values{}
-	reportForm.Set("learned", "HTTP")
-	reportForm.Set("practiced", "handlers")
-	reportForm.Set("next_plan", "tests")
-	reportReq := httptest.NewRequest(http.MethodPost, "/rooms/"+roomID+"/reports", strings.NewReader(reportForm.Encode()))
-	reportReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	for _, c := range cookies {
-		reportReq.AddCookie(c)
-	}
-	reportRR := httptest.NewRecorder()
-	handler.ServeHTTP(reportRR, reportReq)
-	if reportRR.Code != http.StatusForbidden {
-		t.Fatalf("expected missing CSRF to be forbidden, got %d", reportRR.Code)
+	roomRR := httptest.NewRecorder()
+	handler.ServeHTTP(roomRR, roomReq)
+	if roomRR.Code != http.StatusForbidden {
+		t.Fatalf("expected missing CSRF to be forbidden, got %d", roomRR.Code)
 	}
 }

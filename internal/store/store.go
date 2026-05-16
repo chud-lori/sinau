@@ -67,6 +67,7 @@ func (s *Store) Migrate() error {
 			name TEXT NOT NULL,
 			email TEXT NOT NULL UNIQUE COLLATE NOCASE,
 			password_hash TEXT NOT NULL,
+			can_create_rooms INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
@@ -178,7 +179,10 @@ func (s *Store) Migrate() error {
 	if err := s.applyMigration4(); err != nil {
 		return err
 	}
-	return s.applyMigration5()
+	if err := s.applyMigration5(); err != nil {
+		return err
+	}
+	return s.applyMigration6()
 }
 
 func (s *Store) ensureGamificationSchema() error {
@@ -337,6 +341,40 @@ func (s *Store) applyMigration5() error {
 	return tx.Commit()
 }
 
+func (s *Store) applyMigration6() error {
+	const version = 6
+	var exists int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 1 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	canCreateExists, err := columnExistsTx(tx, "users", "can_create_rooms")
+	if err != nil {
+		return err
+	}
+	if !canCreateExists {
+		if _, err := tx.Exec(`ALTER TABLE users ADD COLUMN can_create_rooms INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("migration %d: %w", version, err)
+		}
+	}
+	if _, err := tx.Exec(`UPDATE users SET can_create_rooms = 1
+		WHERE id IN (SELECT user_id FROM memberships WHERE role = 'mentor')
+		   OR id IN (SELECT id FROM users ORDER BY created_at, id LIMIT 1)`); err != nil {
+		return fmt.Errorf("migration %d: %w", version, err)
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`, version, auth.Now()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) applyMigration(version int, stmts []string) error {
 	var exists int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&exists); err != nil {
@@ -408,14 +446,9 @@ func normalizeRoomMode(mode string) string {
 	return domain.RoomModeMentorship
 }
 
-func (s *Store) CreateInitialRoom(name, email, passwordHash, roomName, mode string) (string, error) {
+func (s *Store) CreateInitialRoomCreator(name, email, passwordHash string) (string, error) {
 	now := auth.Now()
-	mode = normalizeRoomMode(mode)
 	uid, err := auth.NewID()
-	if err != nil {
-		return "", err
-	}
-	rid, err := auth.NewID()
 	if err != nil {
 		return "", err
 	}
@@ -424,19 +457,13 @@ func (s *Store) CreateInitialRoom(name, email, passwordHash, roomName, mode stri
 		return "", err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`INSERT INTO users(id,name,email,password_hash,created_at)
-		SELECT ?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM users)`, uid, name, email, passwordHash, now)
+	res, err := tx.Exec(`INSERT INTO users(id,name,email,password_hash,can_create_rooms,created_at)
+		SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM users)`, uid, name, email, passwordHash, 1, now)
 	if err != nil {
 		return "", err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
 		return "", ErrSetupComplete
-	}
-	if _, err = tx.Exec(`INSERT INTO rooms(id,name,mode,created_by,created_at) VALUES(?,?,?,?,?)`, rid, roomName, mode, uid, now); err != nil {
-		return "", err
-	}
-	if _, err = tx.Exec(`INSERT INTO memberships(room_id,user_id,role,created_at) VALUES(?,?,?,?)`, rid, uid, domain.RoleMentor, now); err != nil {
-		return "", err
 	}
 	return uid, tx.Commit()
 }
@@ -498,6 +525,12 @@ func (s *Store) RoomsFor(userID string) ([]domain.Room, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) CanCreateRooms(userID string) bool {
+	var n int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE id = ? AND can_create_rooms = 1`, userID).Scan(&n)
+	return n > 0
 }
 
 func (s *Store) IsMentor(userID string) bool {
@@ -737,6 +770,9 @@ func (s *Store) learnerProgress(userID string) ([]domain.LearnerProgress, error)
 }
 
 func (s *Store) CreateRoom(name, mentorID, mode string) (string, error) {
+	if !s.CanCreateRooms(mentorID) {
+		return "", errors.New("user cannot create rooms")
+	}
 	roomID, err := auth.NewID()
 	if err != nil {
 		return "", err
