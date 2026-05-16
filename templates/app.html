@@ -48,6 +48,7 @@
     <p class="landing-lede">A private progress tracker for mentors guiding learners through reports, feedback, blockers, and next tasks.</p>
     <div class="landing-actions">
       {{if .SetupNeeded}}<a class="button primary" href="/setup">Create first room</a>{{end}}
+      <a class="button secondary" href="/help">Read guide</a>
       <a class="button secondary" href="/login">Login</a>
       <a class="button secondary" href="/join">Join as learner</a>
     </div>
@@ -99,6 +100,12 @@
     <label>Email <input name="email" type="email" required autocomplete="email"></label>
     <label>Password <input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
     <label>Room name <input name="room_name" required placeholder="Backend cohort"></label>
+    <label>Room format
+      <select name="room_mode">
+        <option value="mentorship">Mentorship - reports, blockers, next tasks</option>
+        <option value="classroom">Classroom - assignments, submissions, review</option>
+      </select>
+    </label>
     <button type="submit">Create mentor account</button>
   </form>
 </section>
@@ -148,6 +155,10 @@
   <form method="post" action="/rooms" class="create-room-form compact">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input name="name" required placeholder="New cohort room">
+    <select name="mode" aria-label="Room format">
+      <option value="mentorship">Mentorship</option>
+      <option value="classroom">Classroom</option>
+    </select>
     <button type="submit">Create room</button>
   </form>
 </section>
@@ -188,9 +199,9 @@
         <h2>Cohorts</h2>
       </div>
     </div>
-    <div class="mini-room-list">
+      <div class="mini-room-list">
       {{range .MentorDash.Rooms}}
-        <a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{.Role}}</span></a>
+        <a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{.Mode}}</span></a>
       {{else}}
         <div class="empty-inline"><strong>No rooms</strong><p class="muted">Create your first cohort room.</p></div>
       {{end}}
@@ -255,7 +266,7 @@
   <section class="panel">
     <div class="section-head"><div><p class="eyebrow">Rooms</p><h2>My rooms</h2></div></div>
     <div class="mini-room-list">
-      {{range .LearnerDash.Rooms}}<a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{.Role}}</span></a>{{else}}<div class="empty-inline"><strong>No rooms</strong><p class="muted">Join with an invite code from your mentor.</p></div>{{end}}
+      {{range .LearnerDash.Rooms}}<a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{.Mode}}</span></a>{{else}}<div class="empty-inline"><strong>No rooms</strong><p class="muted">Join with an invite code from your mentor.</p></div>{{end}}
     </div>
   </section>
 </div>
@@ -283,11 +294,31 @@
   </div>
   <div class="hero-actions">
     <span class="pill role-pill">{{.Room.Role}}</span>
+    <span class="pill mode-pill">{{.Room.Mode}}</span>
     {{if eq .Room.Role "mentor"}}<a class="button secondary" href="#invite">Invite people</a>{{end}}
   </div>
 </div>
 
-{{if eq .Room.Role "mentor"}}
+{{if and (eq .Room.Role "mentor") (eq .Room.Mode "classroom")}}
+<section class="stats">
+  <div class="stat-card neutral"><span>Students</span><strong>{{len .RoomLearners}}</strong></div>
+  <div class="stat-card good"><span>Assignments</span><strong>{{len .Assignments}}</strong></div>
+  <div class="stat-card warn"><span>Submissions</span><strong>{{len .Submissions}}</strong></div>
+  <div class="stat-card danger"><span>Need review</span><strong>{{.PendingReviews}}</strong></div>
+</section>
+
+<section class="priority-panel">
+  <div>
+    <p class="eyebrow">Teacher queue</p>
+    <h2>Publish work, review submissions, and keep the class moving</h2>
+  </div>
+  <div class="priority-grid">
+    <a href="#assignments"><strong>{{len .Assignments}}</strong><span>assignments published</span></a>
+    <a href="#submissions"><strong>{{len .Submissions}}</strong><span>submissions received</span></a>
+    <a href="#invite"><strong>{{len .RoomLearners}}</strong><span>students enrolled</span></a>
+  </div>
+</section>
+{{else if eq .Room.Role "mentor"}}
 <section class="stats">
   <div class="stat-card danger"><span>Blocked reports</span><strong>{{.Stats.BlockedReports}}</strong></div>
   <div class="stat-card warn"><span>Waiting feedback</span><strong>{{.Stats.WaitingReports}}</strong></div>
@@ -308,6 +339,155 @@
 </section>
 {{end}}
 
+{{if eq .Room.Mode "classroom"}}
+{{if eq .Room.Role "learner"}}
+<div class="dashboard-grid">
+  <section class="panel primary-panel classroom-panel">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Assignments</p>
+        <h2>Submit Classwork</h2>
+      </div>
+    </div>
+    {{range .Assignments}}
+      <article class="assignment-card">
+        <div class="item-head">
+          <div>
+            <strong>{{.Title}}</strong>
+            <p class="muted">Due {{.DueDate}}</p>
+          </div>
+          {{if .MySubmissionStatus}}<span class="status {{.MySubmissionStatus}}">{{.MySubmissionStatus}}</span>{{else}}<span class="status todo">not submitted</span>{{end}}
+        </div>
+        <p>{{.Instructions}}</p>
+        <div class="report-actions">
+          {{if .ResourceURL}}<a href="{{.ResourceURL}}" rel="noreferrer" target="_blank">Open resource</a>{{end}}
+          {{if .MySubmissionURL}}<a href="{{.MySubmissionURL}}" rel="noreferrer" target="_blank">Open submission</a>{{end}}
+        </div>
+        {{if .MyFeedback}}<p class="feedback-note"><strong>Teacher feedback:</strong> {{.MyFeedback}}{{if .MyScore}} · Score {{.MyScore}}{{end}}</p>{{end}}
+        <form method="post" action="/rooms/{{$.Room.ID}}/assignments/{{.ID}}/submissions" class="stack submission-form">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <label>Submission link <input name="link_url" type="url" required placeholder="https://docs.google.com/..."></label>
+          <label>Note <textarea name="note" placeholder="What should your teacher look at?"></textarea></label>
+          <button type="submit">{{if .MySubmissionStatus}}Update submission{{else}}Submit assignment{{end}}</button>
+        </form>
+      </article>
+    {{else}}
+      <div class="empty-inline action-empty"><strong>No assignments yet</strong><p class="muted">Class assignments from your teacher will appear here.</p></div>
+    {{end}}
+  </section>
+  <section class="panel" id="submissions">
+    <div class="section-head"><div><p class="eyebrow">Classroom</p><h2>Members</h2></div></div>
+    <div class="mini-room-list">
+      {{range .Members}}<a href="/rooms/{{$.Room.ID}}"><strong>{{.Name}}</strong><span>{{.Role}}</span></a>{{end}}
+    </div>
+  </section>
+</div>
+{{else}}
+<div class="dashboard-grid mentor-room-grid">
+  <section class="panel primary-panel classroom-panel">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Classwork</p>
+        <h2>Create Assignment</h2>
+      </div>
+    </div>
+    <form method="post" action="/rooms/{{.Room.ID}}/assignments" class="stack">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <label>Title <input name="title" required placeholder="Week 1 SQL exercise"></label>
+      <label>Instructions <textarea name="instructions" required placeholder="Describe the expected work and submission criteria"></textarea></label>
+      <label>Resource link <input name="resource_url" type="url" placeholder="https://docs.google.com/..."></label>
+      <label>Deadline <input name="due_date" type="date" required></label>
+      <button type="submit">Publish assignment</button>
+    </form>
+  </section>
+  <section class="panel">
+    <div class="section-head"><div><p class="eyebrow">Submission queue</p><h2>Review work</h2></div></div>
+    {{range .Submissions}}
+      <article class="submission-card">
+        <div class="item-head">
+          <div><strong>{{.StudentName}}</strong><p class="muted">{{.AssignmentTitle}} · {{.SubmittedAt}}</p></div>
+          <span class="status {{.Status}}">{{.Status}}</span>
+        </div>
+        {{if .Note}}<p>{{.Note}}</p>{{end}}
+        <p class="report-actions"><a href="{{.LinkURL}}" rel="noreferrer" target="_blank">Open submission</a></p>
+        <form method="post" action="/rooms/{{$.Room.ID}}/submissions/{{.ID}}/review" class="review-form">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <select name="status" aria-label="Review status">
+            <option value="reviewed">reviewed</option>
+            <option value="revise">needs revision</option>
+          </select>
+          <input name="score" placeholder="Score">
+          <textarea name="feedback" placeholder="Feedback"></textarea>
+          <button type="submit">Save review</button>
+        </form>
+      </article>
+    {{else}}
+      <div class="empty-inline action-empty"><strong>No submissions yet</strong><p class="muted">Student submissions will appear here for review.</p></div>
+    {{end}}
+  </section>
+</div>
+
+<section class="panel" id="assignments">
+  <div class="section-head"><div><p class="eyebrow">Assignments</p><h2>Published work</h2></div></div>
+  <div class="assignment-list">
+    {{range .Assignments}}
+      <article class="assignment-card compact-card">
+        <div class="item-head">
+          <div><strong>{{.Title}}</strong><p class="muted">Due {{.DueDate}}</p></div>
+          <span class="pill">{{.Submitted}} / {{.TotalLearners}} submitted</span>
+        </div>
+        <p>{{.Instructions}}</p>
+        {{if .ResourceURL}}<p class="report-actions"><a href="{{.ResourceURL}}" rel="noreferrer" target="_blank">Open resource</a></p>{{end}}
+      </article>
+    {{else}}
+      <div class="empty-inline"><strong>No assignments yet</strong><p class="muted">Publish the first assignment when the class is ready.</p></div>
+    {{end}}
+  </div>
+</section>
+
+<div class="mentor-tools">
+  <section class="panel" id="invite">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Access</p>
+        <h2>Invite</h2>
+      </div>
+    </div>
+    <form hx-post="/rooms/{{.Room.ID}}/invites" hx-target="#invite-result" method="post" class="inline">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <select name="role">
+        <option value="learner">student</option>
+        <option value="mentor">teacher</option>
+      </select>
+      <button type="submit">Create invite</button>
+    </form>
+    <div id="invite-result"></div>
+  </section>
+
+  <section class="panel" id="members">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">People</p>
+        <h2>Class roster</h2>
+      </div>
+    </div>
+    <div class="member-list">
+      <div class="table-head"><span>Name</span><span>Role</span><span>Email</span><span>Open work</span></div>
+      {{range .Members}}
+      <div class="member-row">
+        <span class="member-avatar">{{printf "%.1s" .Name}}</span>
+        <strong>{{.Name}}</strong>
+        <span class="pill">{{if eq .Role "learner"}}student{{else}}teacher{{end}}</span>
+        <span>{{.Email}}</span>
+        <span>{{.OpenTasks}} open</span>
+      </div>
+      {{end}}
+    </div>
+  </section>
+</div>
+{{end}}
+
+{{else}}
 {{if eq .Room.Role "learner"}}
 <div class="dashboard-grid">
   <section class="panel primary-panel checkin-panel">
@@ -587,6 +767,7 @@
   {{else}}<div class="empty-inline"><strong>No reports yet</strong><p class="muted">The first progress update will start the room timeline.</p></div>{{end}}
 </section>
 {{end}}
+{{end}}
 {{template "layout_end" .}}{{end}}
 
 {{define "invite_created"}}
@@ -672,7 +853,7 @@
   <div class="landing-content">
     <p class="eyebrow">Getting started</p>
     <h1>How Sinau works</h1>
-    <p class="landing-lede">Sinau is a private, mentor-led learning tracker. Mentors guide cohorts, learners submit weekly progress, and points are awarded after a quick review.</p>
+    <p class="landing-lede">Sinau is a private learning tracker with two room formats: Mentorship for progress check-ins and Classroom for assignments, submissions, and review.</p>
     <div class="landing-actions">
       {{if .SetupNeeded}}<a class="button primary" href="/setup">Create first room</a>{{end}}
       {{if not .User}}<a class="button secondary" href="/login">Login</a><a class="button secondary" href="/join">Join with invite</a>{{end}}
@@ -684,11 +865,21 @@
   <div class="section-head"><div><p class="eyebrow">Role guide</p><h2>If you are a mentor</h2></div></div>
   <ol class="help-steps">
     <li><strong>Set up</strong> the first mentor account and your first room (only the first user can do this).</li>
+    <li><strong>Choose a room format.</strong> Use <em>Mentorship</em> for guided cohorts with check-ins and tasks. Use <em>Classroom</em> for teacher/student assignment submission workflows.</li>
     <li><strong>Invite learners</strong> from the room page — each code is single-use and expires after seven days.</li>
     <li><strong>Review reports.</strong> Learners post weekly check-ins. Comment, flag blockers, keep them moving.</li>
     <li><strong>Assign tasks</strong> with optional deadlines. Pick a single learner or "All learners" to fan one task out to every learner in the room.</li>
     <li><strong>Review completed tasks</strong> on a fixed <em>1–5 scale</em> (1 = needs more work, 3 = good, 5 = exceptional). Same scale across every task → leaderboards stay comparable.</li>
     <li><strong>Toggle the leaderboard</strong> for each cohort in <em>Room settings</em> — off keeps it private, on shows the full ranking to learners.</li>
+  </ol>
+</section>
+
+<section class="panel help-section">
+  <div class="section-head"><div><p class="eyebrow">Room formats</p><h2>Mentorship vs Classroom</h2></div></div>
+  <ol class="help-steps">
+    <li><strong>Mentorship</strong> gives learners a progress form, blockers, resource links, mentor comments, deadline tasks, points, and optional leaderboards.</li>
+    <li><strong>Classroom</strong> gives mentors assignment publishing, deadline fields, student submission links, review status, feedback, scores, invites, and a class roster.</li>
+    <li><strong>Separate rooms</strong> keep workflows clean. A mentor can create multiple rooms, so one cohort can be mentorship-style while another is classroom-style.</li>
   </ol>
 </section>
 

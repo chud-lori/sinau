@@ -172,7 +172,38 @@ func (s *Store) Migrate() error {
 	// channel CHECK so adding new channels is a code-only change, and
 	// (b) add WhatsApp and Telegram contact fields. PRAGMA foreign_keys
 	// can't be toggled inside a transaction, so this needs its own runner.
-	return s.applyMigration4()
+	if err := s.applyMigration4(); err != nil {
+		return err
+	}
+	return s.applyMigration(5, []string{
+		`ALTER TABLE rooms ADD COLUMN mode TEXT NOT NULL DEFAULT 'mentorship'`,
+		`CREATE TABLE IF NOT EXISTS assignments (
+			id TEXT PRIMARY KEY,
+			room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+			created_by TEXT NOT NULL REFERENCES users(id),
+			title TEXT NOT NULL,
+			instructions TEXT NOT NULL,
+			resource_url TEXT NOT NULL,
+			due_date TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS submissions (
+			id TEXT PRIMARY KEY,
+			assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+			student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			link_url TEXT NOT NULL,
+			note TEXT NOT NULL,
+			status TEXT NOT NULL CHECK(status IN ('submitted','reviewed','revise')),
+			feedback TEXT NOT NULL,
+			score TEXT NOT NULL,
+			submitted_at TEXT NOT NULL,
+			reviewed_at TEXT NOT NULL,
+			UNIQUE(assignment_id, student_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_assignments_room_due ON assignments(room_id, due_date, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_submissions_assignment ON submissions(assignment_id, submitted_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_submissions_student ON submissions(student_id, submitted_at DESC)`,
+	})
 }
 
 func (s *Store) applyMigration4() error {
@@ -249,8 +280,16 @@ func (s *Store) UserCount() int {
 	return n
 }
 
-func (s *Store) CreateInitialRoom(name, email, passwordHash, roomName string) (string, error) {
+func normalizeRoomMode(mode string) string {
+	if mode == domain.RoomModeClassroom {
+		return domain.RoomModeClassroom
+	}
+	return domain.RoomModeMentorship
+}
+
+func (s *Store) CreateInitialRoom(name, email, passwordHash, roomName, mode string) (string, error) {
 	now := auth.Now()
+	mode = normalizeRoomMode(mode)
 	uid, err := auth.NewID()
 	if err != nil {
 		return "", err
@@ -272,7 +311,7 @@ func (s *Store) CreateInitialRoom(name, email, passwordHash, roomName string) (s
 	if n, _ := res.RowsAffected(); n != 1 {
 		return "", ErrSetupComplete
 	}
-	if _, err = tx.Exec(`INSERT INTO rooms(id,name,created_by,created_at) VALUES(?,?,?,?)`, rid, roomName, uid, now); err != nil {
+	if _, err = tx.Exec(`INSERT INTO rooms(id,name,mode,created_by,created_at) VALUES(?,?,?,?,?)`, rid, roomName, mode, uid, now); err != nil {
 		return "", err
 	}
 	if _, err = tx.Exec(`INSERT INTO memberships(room_id,user_id,role,created_at) VALUES(?,?,?,?)`, rid, uid, domain.RoleMentor, now); err != nil {
@@ -320,7 +359,7 @@ func (s *Store) CSRF(token string) string {
 }
 
 func (s *Store) RoomsFor(userID string) ([]domain.Room, error) {
-	rows, err := s.db.Query(`SELECT r.id, r.name, r.created_at, m.role, r.leaderboard_visible
+	rows, err := s.db.Query(`SELECT r.id, r.name, r.mode, r.created_at, m.role, r.leaderboard_visible
 		FROM rooms r JOIN memberships m ON m.room_id = r.id
 		WHERE m.user_id = ? ORDER BY r.created_at DESC`, userID)
 	if err != nil {
@@ -331,7 +370,7 @@ func (s *Store) RoomsFor(userID string) ([]domain.Room, error) {
 	for rows.Next() {
 		var r domain.Room
 		var vis int
-		if err := rows.Scan(&r.ID, &r.Name, &r.CreatedAt, &r.Role, &vis); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &r.Mode, &r.CreatedAt, &r.Role, &vis); err != nil {
 			return nil, err
 		}
 		r.LeaderboardVisible = vis == 1
@@ -576,18 +615,19 @@ func (s *Store) learnerProgress(userID string) ([]domain.LearnerProgress, error)
 	return out, rows.Err()
 }
 
-func (s *Store) CreateRoom(name, mentorID string) (string, error) {
+func (s *Store) CreateRoom(name, mentorID, mode string) (string, error) {
 	roomID, err := auth.NewID()
 	if err != nil {
 		return "", err
 	}
+	mode = normalizeRoomMode(mode)
 	now := auth.Now()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO rooms(id,name,created_by,created_at) VALUES(?,?,?,?)`, roomID, name, mentorID, now); err != nil {
+	if _, err := tx.Exec(`INSERT INTO rooms(id,name,mode,created_by,created_at) VALUES(?,?,?,?,?)`, roomID, name, mode, mentorID, now); err != nil {
 		return "", err
 	}
 	if _, err := tx.Exec(`INSERT INTO memberships(room_id,user_id,role,created_at) VALUES(?,?,?,?)`, roomID, mentorID, domain.RoleMentor, now); err != nil {
@@ -600,9 +640,9 @@ func (s *Store) RoomAccess(roomID, userID string) (domain.Room, string, bool) {
 	var rm domain.Room
 	var role string
 	var vis int
-	err := s.db.QueryRow(`SELECT r.id, r.name, r.created_at, m.role, r.leaderboard_visible
+	err := s.db.QueryRow(`SELECT r.id, r.name, r.mode, r.created_at, m.role, r.leaderboard_visible
 		FROM rooms r JOIN memberships m ON m.room_id = r.id
-		WHERE r.id = ? AND m.user_id = ?`, roomID, userID).Scan(&rm.ID, &rm.Name, &rm.CreatedAt, &role, &vis)
+		WHERE r.id = ? AND m.user_id = ?`, roomID, userID).Scan(&rm.ID, &rm.Name, &rm.Mode, &rm.CreatedAt, &role, &vis)
 	rm.LeaderboardVisible = vis == 1
 	return rm, role, err == nil
 }
@@ -740,6 +780,18 @@ func (s *Store) RoomData(roomID, userID, role string) (domain.RoomData, error) {
 			st.OverdueTasks++
 		}
 	}
+	assignments, err := s.Assignments(roomID, userID, role)
+	if err != nil {
+		return domain.RoomData{}, err
+	}
+	submissions := []domain.Submission{}
+	if role == domain.RoleMentor {
+		submissions, err = s.Submissions(roomID)
+		if err != nil {
+			return domain.RoomData{}, err
+		}
+	}
+	classroom := domain.ClassroomData{Assignments: assignments, Submissions: submissions}
 	board, err := s.RoomLeaderboard(roomID)
 	if err != nil {
 		return domain.RoomData{}, err
@@ -760,6 +812,7 @@ func (s *Store) RoomData(roomID, userID, role string) (domain.RoomData, error) {
 		Reports:     reports,
 		Tasks:       tasks,
 		Invites:     invites,
+		Classroom:   classroom,
 		Stats:       st,
 		Leaderboard: board,
 		MyPoints:    myPoints,
@@ -956,6 +1009,124 @@ func (s *Store) UpdateTaskStatus(roomID, taskID, userID, role, status string) (b
 	res, err := s.db.Exec(`UPDATE tasks SET status = ?, updated_at = ?
 		WHERE id = ? AND room_id = ? AND reviewed_at = '' AND (? = 'mentor' OR assigned_to = ?)`,
 		status, auth.Now(), taskID, roomID, role, userID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+func (s *Store) Assignments(roomID, userID, role string) ([]domain.Assignment, error) {
+	if role == domain.RoleMentor {
+		rows, err := s.db.Query(`SELECT a.id, a.room_id, a.title, a.instructions, a.resource_url, a.due_date, a.created_at,
+			(SELECT COUNT(*) FROM submissions sub WHERE sub.assignment_id = a.id) AS submitted,
+			(SELECT COUNT(*) FROM memberships m WHERE m.room_id = a.room_id AND m.role = 'learner') AS total_learners
+			FROM assignments a
+			WHERE a.room_id = ?
+			ORDER BY CASE WHEN a.due_date != '' AND a.due_date < date('now') THEN 0 WHEN a.due_date != '' THEN 1 ELSE 2 END, a.due_date ASC, a.created_at DESC`, roomID)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var out []domain.Assignment
+		for rows.Next() {
+			var a domain.Assignment
+			if err := rows.Scan(&a.ID, &a.RoomID, &a.Title, &a.Instructions, &a.ResourceURL, &a.DueDate, &a.CreatedAt, &a.Submitted, &a.TotalLearners); err != nil {
+				return nil, err
+			}
+			out = append(out, a)
+		}
+		return out, rows.Err()
+	}
+	rows, err := s.db.Query(`SELECT a.id, a.room_id, a.title, a.instructions, a.resource_url, a.due_date, a.created_at,
+		COALESCE(sub.status, ''), COALESCE(sub.link_url, ''), COALESCE(sub.feedback, ''), COALESCE(sub.score, '')
+		FROM assignments a
+		LEFT JOIN submissions sub ON sub.assignment_id = a.id AND sub.student_id = ?
+		WHERE a.room_id = ?
+		ORDER BY CASE WHEN sub.status IS NULL AND a.due_date != '' AND a.due_date < date('now') THEN 0 WHEN sub.status IS NULL AND a.due_date != '' THEN 1 WHEN sub.status IS NULL THEN 2 ELSE 3 END, a.due_date ASC, a.created_at DESC`, userID, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Assignment
+	for rows.Next() {
+		var a domain.Assignment
+		if err := rows.Scan(&a.ID, &a.RoomID, &a.Title, &a.Instructions, &a.ResourceURL, &a.DueDate, &a.CreatedAt, &a.MySubmissionStatus, &a.MySubmissionURL, &a.MyFeedback, &a.MyScore); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) Submissions(roomID string) ([]domain.Submission, error) {
+	rows, err := s.db.Query(`SELECT sub.id, sub.assignment_id, a.title, sub.student_id, u.name, u.email,
+		sub.link_url, sub.note, sub.status, sub.feedback, sub.score, sub.submitted_at, sub.reviewed_at
+		FROM submissions sub
+		JOIN assignments a ON a.id = sub.assignment_id
+		JOIN users u ON u.id = sub.student_id
+		WHERE a.room_id = ?
+		ORDER BY CASE sub.status WHEN 'submitted' THEN 0 WHEN 'revise' THEN 1 ELSE 2 END, sub.submitted_at DESC`, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Submission
+	for rows.Next() {
+		var sub domain.Submission
+		if err := rows.Scan(&sub.ID, &sub.AssignmentID, &sub.AssignmentTitle, &sub.StudentID, &sub.StudentName, &sub.StudentEmail, &sub.LinkURL, &sub.Note, &sub.Status, &sub.Feedback, &sub.Score, &sub.SubmittedAt, &sub.ReviewedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, sub)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CreateAssignment(roomID, createdBy, title, instructions, resourceURL, dueDate string) error {
+	id, err := auth.NewID()
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`INSERT INTO assignments(id,room_id,created_by,title,instructions,resource_url,due_date,created_at)
+		VALUES(?,?,?,?,?,?,?,?)`, id, roomID, createdBy, title, instructions, resourceURL, dueDate, auth.Now())
+	return err
+}
+
+func (s *Store) SubmitAssignment(roomID, assignmentID, studentID, linkURL, note string) error {
+	if !s.IsLearner(roomID, studentID) {
+		return errors.New("student is not a learner in this room")
+	}
+	id, err := auth.NewID()
+	if err != nil {
+		return err
+	}
+	now := auth.Now()
+	res, err := s.db.Exec(`INSERT INTO submissions(id, assignment_id, student_id, link_url, note, status, feedback, score, submitted_at, reviewed_at)
+		SELECT ?, a.id, ?, ?, ?, 'submitted', '', '', ?, ''
+		FROM assignments a
+		WHERE a.id = ? AND a.room_id = ?
+		ON CONFLICT(assignment_id, student_id) DO UPDATE SET
+			link_url = excluded.link_url,
+			note = excluded.note,
+			status = 'submitted',
+			feedback = '',
+			score = '',
+			submitted_at = excluded.submitted_at,
+			reviewed_at = ''`, id, studentID, linkURL, note, now, assignmentID, roomID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) ReviewSubmission(roomID, submissionID, status, feedback, score string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE submissions
+		SET status = ?, feedback = ?, score = ?, reviewed_at = ?
+		WHERE id = ? AND assignment_id IN (SELECT id FROM assignments WHERE room_id = ?)`,
+		status, feedback, score, auth.Now(), submissionID, roomID)
 	if err != nil {
 		return false, err
 	}

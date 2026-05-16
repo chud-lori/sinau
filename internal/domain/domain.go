@@ -7,6 +7,11 @@ const (
 	RoleLearner = "learner"
 )
 
+const (
+	RoomModeMentorship = "mentorship"
+	RoomModeClassroom  = "classroom"
+)
+
 type User struct {
 	ID    string
 	Name  string
@@ -16,6 +21,7 @@ type User struct {
 type Room struct {
 	ID                 string
 	Name               string
+	Mode               string
 	CreatedAt          string
 	Role               string
 	LeaderboardVisible bool
@@ -115,6 +121,43 @@ type Invite struct {
 	UsedAt    sql.NullString
 }
 
+type Assignment struct {
+	ID                 string
+	RoomID             string
+	Title              string
+	Instructions       string
+	ResourceURL        string
+	DueDate            string
+	CreatedAt          string
+	Submitted          int
+	TotalLearners      int
+	MySubmissionStatus string
+	MySubmissionURL    string
+	MyFeedback         string
+	MyScore            string
+}
+
+type Submission struct {
+	ID              string
+	AssignmentID    string
+	AssignmentTitle string
+	StudentID       string
+	StudentName     string
+	StudentEmail    string
+	LinkURL         string
+	Note            string
+	Status          string
+	Feedback        string
+	Score           string
+	SubmittedAt     string
+	ReviewedAt      string
+}
+
+type ClassroomData struct {
+	Assignments []Assignment
+	Submissions []Submission
+}
+
 type Stats struct {
 	BlockedReports   int
 	WaitingReports   int
@@ -141,6 +184,7 @@ type RoomData struct {
 	Reports     []Report
 	Tasks       []Task
 	Invites     []Invite
+	Classroom   ClassroomData
 	Stats       Stats
 	Leaderboard []LeaderboardEntry
 	MyPoints    int

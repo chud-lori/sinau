@@ -25,7 +25,7 @@ func createUserRoom(t *testing.T, st *Store, name, email string) (string, string
 	if err != nil {
 		t.Fatal(err)
 	}
-	uid, err := st.CreateInitialRoom(name, email, hash, "Backend")
+	uid, err := st.CreateInitialRoom(name, email, hash, "Backend", domain.RoomModeMentorship)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,10 +70,10 @@ func TestInitialSetupOnlyRunsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateInitialRoom("Mentor", "mentor@example.com", hash, "Backend"); err != nil {
+	if _, err := st.CreateInitialRoom("Mentor", "mentor@example.com", hash, "Backend", domain.RoomModeMentorship); err != nil {
 		t.Fatal(err)
 	}
-	_, err = st.CreateInitialRoom("Other", "other@example.com", hash, "Frontend")
+	_, err = st.CreateInitialRoom("Other", "other@example.com", hash, "Frontend", domain.RoomModeMentorship)
 	if err != ErrSetupComplete {
 		t.Fatalf("expected ErrSetupComplete, got %v", err)
 	}
@@ -135,7 +135,7 @@ func TestLearnerOnlySeesOwnReports(t *testing.T) {
 func TestMentorCanCreateMultipleRooms(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, firstRoomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
-	secondRoomID, err := st.CreateRoom("Frontend", mentorID)
+	secondRoomID, err := st.CreateRoom("Frontend", mentorID, domain.RoomModeMentorship)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,6 +151,56 @@ func TestMentorCanCreateMultipleRooms(t *testing.T) {
 	}
 	if !st.IsMentor(mentorID) {
 		t.Fatal("mentor should be able to create rooms")
+	}
+}
+
+func TestClassroomAssignmentsCanBeSubmittedAndReviewed(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, _ := createUserRoom(t, st, "Mentor", "mentor@example.com")
+	roomID, err := st.CreateRoom("Data Science", mentorID, domain.RoomModeClassroom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rm, role, ok := st.RoomAccess(roomID, mentorID)
+	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
+		t.Fatalf("classroom room access broken: room=%+v role=%q ok=%v", rm, role, ok)
+	}
+	code := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
+	learnerID, _ := joinLearner(t, st, code, "Student", "student@example.com")
+
+	if err := st.CreateAssignment(roomID, mentorID, "Build notebook", "Train a small model", "https://docs.google.com/doc", "2026-06-01"); err != nil {
+		t.Fatal(err)
+	}
+	studentAssignments, err := st.Assignments(roomID, learnerID, domain.RoleLearner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(studentAssignments) != 1 || studentAssignments[0].MySubmissionStatus != "" {
+		t.Fatalf("expected one unsubmitted assignment, got %+v", studentAssignments)
+	}
+	if err := st.SubmitAssignment(roomID, studentAssignments[0].ID, learnerID, "https://colab.research.google.com/notebook", "Finished baseline"); err != nil {
+		t.Fatal(err)
+	}
+	submissions, err := st.Submissions(roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(submissions) != 1 || submissions[0].Status != "submitted" || submissions[0].StudentName != "Student" {
+		t.Fatalf("expected submitted student work, got %+v", submissions)
+	}
+	updated, err := st.ReviewSubmission(roomID, submissions[0].ID, "reviewed", "Good baseline", "90")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated {
+		t.Fatal("review did not update submission")
+	}
+	studentAssignments, err = st.Assignments(roomID, learnerID, domain.RoleLearner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if studentAssignments[0].MySubmissionStatus != "reviewed" || studentAssignments[0].MyScore != "90" {
+		t.Fatalf("learner did not see review result: %+v", studentAssignments[0])
 	}
 }
 

@@ -46,24 +46,27 @@ type PageData struct {
 	SetupNeeded          bool
 	NotificationsEnabled bool
 	UserPoints           int
-	Rooms        []domain.Room
-	Room         domain.Room
-	Members      []domain.Member
-	Reports      []domain.Report
-	Report       domain.Report
-	Comments     []domain.Comment
-	Tasks        []domain.Task
-	Invites      []domain.Invite
-	InviteCode   string
-	JoinCode     string
-	Stats        domain.Stats
-	RoomLearners []domain.Member
-	Leaderboard  []domain.LeaderboardEntry
-	MyPoints     int
-	MyRank       domain.Rank
-	MentorDash   domain.MentorDashboard
-	LearnerDash  domain.LearnerDashboard
-	Prefs        domain.NotificationPrefs
+	Rooms                []domain.Room
+	Room                 domain.Room
+	Members              []domain.Member
+	Reports              []domain.Report
+	Report               domain.Report
+	Comments             []domain.Comment
+	Tasks                []domain.Task
+	Assignments          []domain.Assignment
+	Submissions          []domain.Submission
+	PendingReviews       int
+	Invites              []domain.Invite
+	InviteCode           string
+	JoinCode             string
+	Stats                domain.Stats
+	RoomLearners         []domain.Member
+	Leaderboard          []domain.LeaderboardEntry
+	MyPoints             int
+	MyRank               domain.Rank
+	MentorDash           domain.MentorDashboard
+	LearnerDash          domain.LearnerDashboard
+	Prefs                domain.NotificationPrefs
 }
 
 func New(cfg Config) (*Server, error) {
@@ -90,6 +93,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(s.staticDir))))
 	mux.HandleFunc("GET /", s.withUser(s.home))
+	mux.HandleFunc("GET /guide", s.withUser(s.guide))
 	mux.HandleFunc("GET /setup", s.withUser(s.setupForm))
 	mux.HandleFunc("POST /setup", s.rateLimit(s.setup))
 	mux.HandleFunc("GET /login", s.withUser(s.loginForm))
@@ -106,6 +110,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /rooms/{roomID}/tasks", s.auth(s.createTask))
 	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/status", s.auth(s.updateTask))
 	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/review", s.auth(s.reviewTask))
+	mux.HandleFunc("POST /rooms/{roomID}/assignments", s.auth(s.createAssignment))
+	mux.HandleFunc("POST /rooms/{roomID}/assignments/{assignmentID}/submissions", s.auth(s.submitAssignment))
+	mux.HandleFunc("POST /rooms/{roomID}/submissions/{submissionID}/review", s.auth(s.reviewSubmission))
 	mux.HandleFunc("POST /rooms/{roomID}/settings", s.auth(s.updateRoomSettings))
 	if s.notificationsEnabled {
 		mux.HandleFunc("GET /settings", s.auth(s.settingsPage))
@@ -238,6 +245,10 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "learner_home", pd)
 }
 
+func (s *Server) guide(w http.ResponseWriter, r *http.Request) {
+	s.helpPage(w, r)
+}
+
 func (s *Server) setupForm(w http.ResponseWriter, r *http.Request) {
 	if s.store.UserCount() > 0 {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -255,6 +266,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(auth.Clean(r.FormValue("email"), 160))
 	password := r.FormValue("password")
 	roomName := auth.Clean(r.FormValue("room_name"), 100)
+	roomMode := auth.Clean(r.FormValue("room_mode"), 40)
 	if name == "" || !auth.ValidEmail(email) || len(password) < 12 || roomName == "" {
 		s.render(w, "setup", PageData{Title: "Setup", Error: "Use a name, valid email, room name, and password with at least 12 characters."})
 		return
@@ -264,7 +276,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
-	uid, err := s.store.CreateInitialRoom(name, email, hash, roomName)
+	uid, err := s.store.CreateInitialRoom(name, email, hash, roomName, roomMode)
 	if err == store.ErrSetupComplete {
 		http.Error(w, "setup already completed", http.StatusForbidden)
 		return
@@ -360,11 +372,12 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := auth.Clean(r.FormValue("name"), 100)
+	mode := auth.Clean(r.FormValue("mode"), 40)
 	if name == "" {
 		http.Error(w, "room name required", http.StatusBadRequest)
 		return
 	}
-	roomID, err := s.store.CreateRoom(name, u.ID)
+	roomID, err := s.store.CreateRoom(name, u.ID, mode)
 	if err != nil {
 		s.serverError(w, err)
 		return
@@ -398,6 +411,13 @@ func (s *Server) roomPage(w http.ResponseWriter, r *http.Request) {
 	pd.RoomLearners = learners
 	pd.Reports = data.Reports
 	pd.Tasks = data.Tasks
+	pd.Assignments = data.Classroom.Assignments
+	pd.Submissions = data.Classroom.Submissions
+	for _, sub := range data.Classroom.Submissions {
+		if sub.Status == "submitted" {
+			pd.PendingReviews++
+		}
+	}
 	pd.Invites = data.Invites
 	pd.Stats = data.Stats
 	pd.MyPoints = data.MyPoints
@@ -612,6 +632,89 @@ func (s *Server) reviewTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if !awarded {
 		http.Error(w, "task is not awaiting review", http.StatusConflict)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
+func (s *Server) createAssignment(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID := r.PathValue("roomID")
+	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	title := auth.Clean(r.FormValue("title"), 180)
+	instructions := auth.Clean(r.FormValue("instructions"), 2000)
+	resourceURL := auth.Clean(r.FormValue("resource_url"), 400)
+	dueDate := auth.Clean(r.FormValue("due_date"), 10)
+	if title == "" || instructions == "" || dueDate == "" {
+		http.Error(w, "title, instructions, and deadline are required", http.StatusBadRequest)
+		return
+	}
+	if _, err := time.Parse("2006-01-02", dueDate); err != nil {
+		http.Error(w, "deadline must use YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+	if resourceURL != "" && !auth.ValidExternalURL(resourceURL) {
+		http.Error(w, "resource link must be an http or https URL", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.CreateAssignment(roomID, u.ID, title, instructions, resourceURL, dueDate); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
+func (s *Server) submitAssignment(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, assignmentID := r.PathValue("roomID"), r.PathValue("assignmentID")
+	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok || role != domain.RoleLearner || rm.Mode != domain.RoomModeClassroom {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	linkURL := auth.Clean(r.FormValue("link_url"), 400)
+	note := auth.Clean(r.FormValue("note"), 1600)
+	if linkURL == "" || !auth.ValidExternalURL(linkURL) {
+		http.Error(w, "submission link must be an http or https URL", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.SubmitAssignment(roomID, assignmentID, u.ID, linkURL, note); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
+func (s *Server) reviewSubmission(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, submissionID := r.PathValue("roomID"), r.PathValue("submissionID")
+	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	status := r.FormValue("status")
+	if status != "reviewed" && status != "revise" {
+		http.Error(w, "bad status", http.StatusBadRequest)
+		return
+	}
+	feedback := auth.Clean(r.FormValue("feedback"), 2000)
+	score := auth.Clean(r.FormValue("score"), 80)
+	if status == "revise" && feedback == "" {
+		http.Error(w, "revision feedback is required", http.StatusBadRequest)
+		return
+	}
+	updated, err := s.store.ReviewSubmission(roomID, submissionID, status, feedback, score)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if !updated {
+		http.NotFound(w, r)
 		return
 	}
 	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
