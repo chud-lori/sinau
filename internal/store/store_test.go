@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -37,6 +38,56 @@ func createUserRoom(t *testing.T, st *Store, name, email string) (string, string
 		t.Fatalf("expected one room, got %d", len(rooms))
 	}
 	return uid, rooms[0].ID
+}
+
+func TestMigrateHandlesPreRebaseClassroomMigration3(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sinau.db")
+	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmts := []string{
+		`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`,
+		`INSERT INTO schema_migrations(version, applied_at) VALUES(1, '2026-01-01T00:00:00Z'), (2, '2026-01-01T00:00:00Z'), (3, '2026-01-01T00:00:00Z')`,
+		`CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL, created_at TEXT NOT NULL)`,
+		`CREATE TABLE rooms (id TEXT PRIMARY KEY, name TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'mentorship', created_by TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL)`,
+		`CREATE TABLE tasks (id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE, assigned_to TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, assigned_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, title TEXT NOT NULL, detail TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('todo','doing','done')), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, due_date TEXT NOT NULL DEFAULT '', last_reminded_at TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE assignments (id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE, created_by TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL, instructions TEXT NOT NULL, resource_url TEXT NOT NULL, due_date TEXT NOT NULL, created_at TEXT NOT NULL)`,
+		`CREATE TABLE submissions (id TEXT PRIMARY KEY, assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE, student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, link_url TEXT NOT NULL, note TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('submitted','reviewed','revise')), feedback TEXT NOT NULL, score TEXT NOT NULL, submitted_at TEXT NOT NULL, reviewed_at TEXT NOT NULL, UNIQUE(assignment_id, student_id))`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, tc := range []struct {
+		table  string
+		column string
+	}{
+		{"rooms", "mode"},
+		{"rooms", "leaderboard_visible"},
+		{"tasks", "points_awarded"},
+		{"tasks", "reviewed_at"},
+		{"notification_prefs", "whatsapp_number"},
+		{"notification_prefs", "telegram_chat_id"},
+	} {
+		ok, err := st.columnExists(tc.table, tc.column)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			t.Fatalf("expected %s.%s to exist after compatibility migration", tc.table, tc.column)
+		}
+	}
 }
 
 func createInvite(t *testing.T, st *Store, roomID, mentorID, role string) string {

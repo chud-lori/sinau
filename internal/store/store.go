@@ -168,6 +168,9 @@ func (s *Store) Migrate() error {
 	}); err != nil {
 		return err
 	}
+	if err := s.ensureGamificationSchema(); err != nil {
+		return err
+	}
 	// Migration 4 rebuilds notification_prefs to (a) drop the hard-coded
 	// channel CHECK so adding new channels is a code-only change, and
 	// (b) add WhatsApp and Telegram contact fields. PRAGMA foreign_keys
@@ -175,35 +178,58 @@ func (s *Store) Migrate() error {
 	if err := s.applyMigration4(); err != nil {
 		return err
 	}
-	return s.applyMigration(5, []string{
-		`ALTER TABLE rooms ADD COLUMN mode TEXT NOT NULL DEFAULT 'mentorship'`,
-		`CREATE TABLE IF NOT EXISTS assignments (
+	return s.applyMigration5()
+}
+
+func (s *Store) ensureGamificationSchema() error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS notification_prefs (
+			user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			enabled INTEGER NOT NULL DEFAULT 0,
+			channel TEXT NOT NULL DEFAULT 'off' CHECK(channel IN ('off','email','log')),
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS points_ledger (
 			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-			created_by TEXT NOT NULL REFERENCES users(id),
-			title TEXT NOT NULL,
-			instructions TEXT NOT NULL,
-			resource_url TEXT NOT NULL,
-			due_date TEXT NOT NULL,
-			created_at TEXT NOT NULL
+			source TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			amount INTEGER NOT NULL,
+			awarded_by TEXT NOT NULL,
+			awarded_at TEXT NOT NULL,
+			UNIQUE(source, source_id)
 		)`,
-		`CREATE TABLE IF NOT EXISTS submissions (
-			id TEXT PRIMARY KEY,
-			assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
-			student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			link_url TEXT NOT NULL,
-			note TEXT NOT NULL,
-			status TEXT NOT NULL CHECK(status IN ('submitted','reviewed','revise')),
-			feedback TEXT NOT NULL,
-			score TEXT NOT NULL,
-			submitted_at TEXT NOT NULL,
-			reviewed_at TEXT NOT NULL,
-			UNIQUE(assignment_id, student_id)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_assignments_room_due ON assignments(room_id, due_date, created_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_submissions_assignment ON submissions(assignment_id, submitted_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_submissions_student ON submissions(student_id, submitted_at DESC)`,
-	})
+		`CREATE INDEX IF NOT EXISTS idx_points_ledger_user ON points_ledger(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_points_ledger_room_user ON points_ledger(room_id, user_id)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	columns := []struct {
+		table string
+		name  string
+		stmt  string
+	}{
+		{"rooms", "leaderboard_visible", `ALTER TABLE rooms ADD COLUMN leaderboard_visible INTEGER NOT NULL DEFAULT 0`},
+		{"tasks", "points_awarded", `ALTER TABLE tasks ADD COLUMN points_awarded INTEGER NOT NULL DEFAULT 0`},
+		{"tasks", "reviewed_at", `ALTER TABLE tasks ADD COLUMN reviewed_at TEXT NOT NULL DEFAULT ''`},
+		{"tasks", "reviewed_by", `ALTER TABLE tasks ADD COLUMN reviewed_by TEXT NOT NULL DEFAULT ''`},
+	}
+	for _, col := range columns {
+		exists, err := s.columnExists(col.table, col.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := s.db.Exec(col.stmt); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Store) applyMigration4() error {
@@ -250,6 +276,67 @@ func (s *Store) applyMigration4() error {
 	return tx.Commit()
 }
 
+func (s *Store) applyMigration5() error {
+	const version = 5
+	var exists int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 1 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	modeExists, err := columnExistsTx(tx, "rooms", "mode")
+	if err != nil {
+		return err
+	}
+	stmts := []string{}
+	if !modeExists {
+		stmts = append(stmts, `ALTER TABLE rooms ADD COLUMN mode TEXT NOT NULL DEFAULT 'mentorship'`)
+	}
+	stmts = append(stmts,
+		`CREATE TABLE IF NOT EXISTS assignments (
+			id TEXT PRIMARY KEY,
+			room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+			created_by TEXT NOT NULL REFERENCES users(id),
+			title TEXT NOT NULL,
+			instructions TEXT NOT NULL,
+			resource_url TEXT NOT NULL,
+			due_date TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS submissions (
+			id TEXT PRIMARY KEY,
+			assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+			student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			link_url TEXT NOT NULL,
+			note TEXT NOT NULL,
+			status TEXT NOT NULL CHECK(status IN ('submitted','reviewed','revise')),
+			feedback TEXT NOT NULL,
+			score TEXT NOT NULL,
+			submitted_at TEXT NOT NULL,
+			reviewed_at TEXT NOT NULL,
+			UNIQUE(assignment_id, student_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_assignments_room_due ON assignments(room_id, due_date, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_submissions_assignment ON submissions(assignment_id, submitted_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_submissions_student ON submissions(student_id, submitted_at DESC)`,
+	)
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("migration %d: %w", version, err)
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`, version, auth.Now()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) applyMigration(version int, stmts []string) error {
 	var exists int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&exists); err != nil {
@@ -272,6 +359,40 @@ func (s *Store) applyMigration(version int, stmts []string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Store) columnExists(table, column string) (bool, error) {
+	return columnExistsQuery(s.db, table, column)
+}
+
+func columnExistsTx(tx *sql.Tx, table, column string) (bool, error) {
+	return columnExistsQuery(tx, table, column)
+}
+
+type pragmaQuerier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+func columnExistsQuery(q pragmaQuerier, table, column string) (bool, error) {
+	rows, err := q.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func (s *Store) UserCount() int {
