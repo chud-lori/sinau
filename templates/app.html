@@ -1,0 +1,297 @@
+{{define "layout_start"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} - Sinau</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" aria-label="Sinau home">
+    <span class="brand-mark">S</span>
+    <span>Sinau</span>
+  </a>
+  {{if .User}}
+  <nav>
+    <span class="user-chip">{{.User.Name}}</span>
+    <form method="post" action="/logout">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <button class="link" type="submit">Logout</button>
+    </form>
+  </nav>
+  {{end}}
+</header>
+<main class="shell">
+{{if .Error}}<p class="alert error">{{.Error}}</p>{{end}}
+{{if .Notice}}<p class="alert">{{.Notice}}</p>{{end}}
+{{end}}
+
+{{define "layout_end"}}</main></body></html>{{end}}
+
+{{define "setup"}}{{template "layout_start" .}}
+<section class="auth-card">
+  <div class="auth-copy">
+    <p class="eyebrow">Private learning rooms</p>
+    <h1>Set Up First Room</h1>
+    <p class="muted">Create the first mentor account and start with one invite-only room.</p>
+  </div>
+  <form method="post" action="/setup" class="stack">
+    <label>Name <input name="name" required autocomplete="name"></label>
+    <label>Email <input name="email" type="email" required autocomplete="email"></label>
+    <label>Password <input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
+    <label>Room name <input name="room_name" required placeholder="Backend cohort"></label>
+    <button type="submit">Create mentor account</button>
+  </form>
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "login"}}{{template "layout_start" .}}
+<section class="auth-card">
+  <div class="auth-copy">
+    <p class="eyebrow">Progress tracking</p>
+    <h1>Login</h1>
+    <p class="muted">Open your learning room, review reports, and keep next actions visible.</p>
+  </div>
+  {{if .SetupNeeded}}<p>No mentor exists yet. <a href="/setup">Create the first room</a>.</p>{{end}}
+  <form method="post" action="/login" class="stack">
+    <label>Email <input name="email" type="email" required autocomplete="email"></label>
+    <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
+    <button type="submit">Login</button>
+  </form>
+  <p class="muted">Joining requires an invite code from a mentor.</p>
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "join"}}{{template "layout_start" .}}
+<section class="auth-card">
+  <div class="auth-copy">
+    <p class="eyebrow">Invitation required</p>
+    <h1>Join Room</h1>
+    <p class="muted">Use the invite from your mentor to create an account inside the correct room.</p>
+  </div>
+  <form method="post" action="/join" class="stack">
+    <label>Invite code <input name="code" value="{{.JoinCode}}" required></label>
+    <label>Name <input name="name" required autocomplete="name"></label>
+    <label>Email <input name="email" type="email" required autocomplete="email"></label>
+    <label>Password <input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
+    <button type="submit">Create account</button>
+  </form>
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "home"}}{{template "layout_start" .}}
+<div class="page-title">
+  <div>
+    <p class="eyebrow">Workspace</p>
+    <h1>Rooms</h1>
+  </div>
+</div>
+<div class="room-grid">
+{{range .Rooms}}
+  <a class="room-card" href="/rooms/{{.ID}}">
+    <span class="room-card-title">{{.Name}}</span>
+    <span class="room-card-meta"><span class="pill">{{.Role}}</span><span>{{.CreatedAt}}</span></span>
+  </a>
+{{else}}
+  <section class="empty-state">
+    <h2>No rooms yet</h2>
+    <p class="muted">Ask a mentor for an invite link, or run setup if this is a fresh install.</p>
+  </section>
+{{end}}
+</div>
+{{template "layout_end" .}}{{end}}
+
+{{define "room"}}{{template "layout_start" .}}
+<div class="room-hero">
+  <div>
+    <a class="back-link" href="/">Rooms</a>
+    <h1>{{.Room.Name}}</h1>
+    <p class="muted">{{if eq .Room.Role "mentor"}}Review reports, unblock learners, and assign the next concrete task.{{else}}Submit progress, track assigned tasks, and keep mentor feedback in one place.{{end}}</p>
+  </div>
+  <span class="pill">{{.Room.Role}}</span>
+</div>
+
+{{if eq .Room.Role "mentor"}}
+<section class="stats">
+  <div><strong>{{.Stats.BlockedReports}}</strong><span>blocked reports</span></div>
+  <div><strong>{{.Stats.WaitingReports}}</strong><span>waiting feedback</span></div>
+  <div><strong>{{.Stats.InactiveLearners}}</strong><span>not checked in</span></div>
+  <div><strong>{{.Stats.OpenTasks}}</strong><span>open tasks</span></div>
+</section>
+{{end}}
+
+<div class="workspace-layout">
+  <section class="panel primary-panel">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Check-in</p>
+        <h2>Submit Progress</h2>
+      </div>
+    </div>
+    <form method="post" action="/rooms/{{.Room.ID}}/reports" class="stack">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <label>Learned <textarea name="learned" required placeholder="Concepts, docs, videos, or notes you worked through"></textarea></label>
+      <label>Practiced <textarea name="practiced" required placeholder="Code, exercises, experiments, or small deliverables"></textarea></label>
+      <label>Blocker <textarea name="blocker" placeholder="Leave empty when nothing needs mentor attention"></textarea></label>
+      <label>Next plan <textarea name="next_plan" required placeholder="The next concrete thing you will do"></textarea></label>
+      <label>Resource link <input name="link_url" type="url" placeholder="https://docs.google.com/..."></label>
+      <button type="submit">Submit progress</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Next actions</p>
+        <h2>Tasks</h2>
+      </div>
+    </div>
+    {{range .Tasks}}
+      <article class="task-card">
+        <div class="item-head">
+          <strong>{{.Title}}</strong>
+          <span class="status {{.Status}}">{{.Status}}</span>
+        </div>
+        {{if .Detail}}<p>{{.Detail}}</p>{{end}}
+        <p class="muted">Assigned to {{.Assignee}}</p>
+        <form class="task-update" method="post" action="/rooms/{{$.Room.ID}}/tasks/{{.ID}}/status">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <select name="status" aria-label="Task status">
+            <option value="todo" {{if eq .Status "todo"}}selected{{end}}>todo</option>
+            <option value="doing" {{if eq .Status "doing"}}selected{{end}}>doing</option>
+            <option value="done" {{if eq .Status "done"}}selected{{end}}>done</option>
+          </select>
+          <button type="submit">Update</button>
+        </form>
+      </article>
+    {{else}}<div class="empty-inline"><strong>No tasks yet</strong><p class="muted">Assigned work will show up here.</p></div>{{end}}
+  </section>
+</div>
+
+{{if eq .Room.Role "mentor"}}
+<div class="mentor-tools">
+  <section class="panel">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Access</p>
+        <h2>Invite</h2>
+      </div>
+    </div>
+    <form hx-post="/rooms/{{.Room.ID}}/invites" hx-target="#invite-result" method="post" class="inline">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <select name="role">
+        <option value="learner">learner</option>
+        <option value="mentor">mentor</option>
+      </select>
+      <button type="submit">Create invite</button>
+    </form>
+    <div id="invite-result"></div>
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Mentor action</p>
+        <h2>Assign Task</h2>
+      </div>
+    </div>
+    <form method="post" action="/rooms/{{.Room.ID}}/tasks" class="stack">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <label>Assignee
+        <select name="assigned_to">
+          {{range .Members}}<option value="{{.UserID}}">{{.Name}} - {{.Role}}</option>{{end}}
+        </select>
+      </label>
+      <label>Title <input name="title" required></label>
+      <label>Detail <textarea name="detail"></textarea></label>
+      <button type="submit">Assign</button>
+    </form>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">People</p>
+      <h2>Members</h2>
+    </div>
+  </div>
+  <div class="table">
+    <div class="table-head"><span>Name</span><span>Role</span><span>Last report</span><span>Tasks</span></div>
+    {{range .Members}}
+    <div><strong>{{.Name}}</strong><span>{{.Role}}</span><span>{{if .LastReport}}{{.LastReport}}{{else}}no report{{end}}</span><span>{{.OpenTasks}} open</span></div>
+    {{end}}
+  </div>
+</section>
+{{end}}
+
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">Timeline</p>
+      <h2>Reports</h2>
+    </div>
+  </div>
+  {{range .Reports}}
+    <article class="report-card">
+      <div class="item-head">
+        <div>
+          <strong>{{.Author}}</strong>
+          <p class="muted">{{.CreatedAt}}</p>
+        </div>
+        <a class="comment-link" href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{.Comments}} comments</a>
+      </div>
+      {{if .Blocker}}<p class="blocker">Blocked: {{.Blocker}}</p>{{end}}
+      <p>{{.Learned}}</p>
+      <div class="report-actions">
+        {{if .LinkURL}}<a href="{{.LinkURL}}" rel="noreferrer" target="_blank">Open resource</a>{{end}}
+        <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">Review report</a>
+      </div>
+    </article>
+  {{else}}<div class="empty-inline"><strong>No reports yet</strong><p class="muted">The first progress update will start the room timeline.</p></div>{{end}}
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "invite_created"}}
+<div class="invite-result">
+  <p class="alert">Invite code: <code>{{.InviteCode}}</code></p>
+  <p class="muted">Join URL: <code>/join?code={{.InviteCode}}</code></p>
+</div>
+{{end}}
+
+{{define "report"}}{{template "layout_start" .}}
+<p><a class="back-link" href="/rooms/{{.Room.ID}}">Back to {{.Room.Name}}</a></p>
+<section class="panel">
+  <div class="report-title">
+    <div>
+      <p class="eyebrow">Progress report</p>
+      <h1>{{.Report.Author}}</h1>
+      <p class="muted">{{.Report.CreatedAt}}</p>
+    </div>
+    {{if .Report.Blocker}}<span class="status attention">blocked</span>{{end}}
+  </div>
+  <div class="report-detail-grid">
+    <section><h2>Learned</h2><p>{{.Report.Learned}}</p></section>
+    <section><h2>Practiced</h2><p>{{.Report.Practiced}}</p></section>
+    {{if .Report.Blocker}}<section><h2>Blocker</h2><p class="blocker">{{.Report.Blocker}}</p></section>{{end}}
+    <section><h2>Next</h2><p>{{.Report.NextPlan}}</p></section>
+  </div>
+  {{if .Report.LinkURL}}<p class="report-actions"><a href="{{.Report.LinkURL}}" rel="noreferrer" target="_blank">Open resource</a></p>{{end}}
+</section>
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">Discussion</p>
+      <h2>Comments</h2>
+    </div>
+  </div>
+  {{range .Comments}}<article class="comment-card"><strong>{{.Author}}</strong><p>{{.Body}}</p><p class="muted">{{.CreatedAt}}</p></article>{{else}}<div class="empty-inline"><strong>No comments yet</strong><p class="muted">Feedback and clarifications will appear here.</p></div>{{end}}
+  <form method="post" action="/rooms/{{.Room.ID}}/reports/{{.Report.ID}}/comments" class="stack">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>Comment <textarea name="body" required placeholder="Write feedback, ask a clarifying question, or confirm the next step"></textarea></label>
+    <button type="submit">Comment</button>
+  </form>
+</section>
+{{template "layout_end" .}}{{end}}
