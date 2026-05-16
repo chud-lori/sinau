@@ -14,10 +14,36 @@ type User struct {
 }
 
 type Room struct {
-	ID        string
-	Name      string
-	CreatedAt string
-	Role      string
+	ID                 string
+	Name               string
+	CreatedAt          string
+	Role               string
+	LeaderboardVisible bool
+}
+
+const (
+	NotifChannelOff   = "off"
+	NotifChannelEmail = "email"
+	NotifChannelLog   = "log"
+)
+
+type NotificationPrefs struct {
+	UserID    string
+	Enabled   bool
+	Channel   string
+	UpdatedAt string
+}
+
+type LeaderboardEntry struct {
+	UserID string
+	Name   string
+	Points int
+	Rank   int
+}
+
+type Rank struct {
+	Position int
+	Total    int
 }
 
 type Member struct {
@@ -52,14 +78,18 @@ type Comment struct {
 }
 
 type Task struct {
-	ID        string
-	Title     string
-	Detail    string
-	Status    string
-	Assignee  string
-	DueDate   string
-	DueState  string
-	CreatedAt string
+	ID            string
+	Title         string
+	Detail        string
+	Status        string
+	Assignee      string
+	AssigneeID    string
+	DueDate       string
+	DueState      string
+	CreatedAt     string
+	PointsAwarded int
+	ReviewedAt    string
+	ReviewedBy    string
 }
 
 type Invite struct {
@@ -91,11 +121,14 @@ type TaskReminder struct {
 }
 
 type RoomData struct {
-	Members []Member
-	Reports []Report
-	Tasks   []Task
-	Invites []Invite
-	Stats   Stats
+	Members     []Member
+	Reports     []Report
+	Tasks       []Task
+	Invites     []Invite
+	Stats       Stats
+	Leaderboard []LeaderboardEntry
+	MyPoints    int
+	MyRank      Rank
 }
 
 type MentorDashboard struct {

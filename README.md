@@ -30,10 +30,18 @@ Environment:
 - `SINAU_REMINDERS`, set `false` to disable deadline reminder worker
 - `SINAU_REMINDER_INTERVAL`, default `1h`
 - `SINAU_REMINDER_WINDOW`, default `24h`
-- `SINAU_NOTIFIER`, reminder delivery channel, default `log`. Real channels
-  (email, WhatsApp, etc.) are not implemented yet — see
-  `cmd/sinau/main.go:buildNotifier` and `internal/reminder/reminder.go` for
-  the extension seam.
+- `SINAU_SMTP_HOST`, e.g. `smtp.example.com:587`. Empty disables email
+  delivery (reminders for users who chose `email` quietly fall back to log).
+- `SINAU_SMTP_USER`, `SINAU_SMTP_PASS`, `SINAU_SMTP_FROM` — SMTP auth /
+  envelope.
+- `SINAU_SMTP_STARTTLS`, default `true`. Set `false` for plaintext local
+  relays.
+
+Users opt in to reminders themselves at `/settings`. The current channels
+are `off` / `email` / `log`. To wire a new channel (e.g. WhatsApp via the
+`go-whatsapp-web-multidevice` REST daemon), add a `reminder.Notifier`
+implementation and register it in `cmd/sinau/main.go:buildNotifiers`. The
+worker dispatches per-user based on `notification_prefs.channel`.
 
 Deployment notes are in [DEPLOYMENT.md](DEPLOYMENT.md).
 

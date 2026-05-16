@@ -134,10 +134,37 @@ func (s *Store) Migrate() error {
 	}); err != nil {
 		return err
 	}
-	return s.applyMigration(2, []string{
+	if err := s.applyMigration(2, []string{
 		`ALTER TABLE tasks ADD COLUMN due_date TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE tasks ADD COLUMN last_reminded_at TEXT NOT NULL DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date, status)`,
+	}); err != nil {
+		return err
+	}
+	return s.applyMigration(3, []string{
+		`CREATE TABLE IF NOT EXISTS notification_prefs (
+			user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			enabled INTEGER NOT NULL DEFAULT 0,
+			channel TEXT NOT NULL DEFAULT 'off' CHECK(channel IN ('off','email','log')),
+			updated_at TEXT NOT NULL
+		)`,
+		`ALTER TABLE rooms ADD COLUMN leaderboard_visible INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE tasks ADD COLUMN points_awarded INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE tasks ADD COLUMN reviewed_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tasks ADD COLUMN reviewed_by TEXT NOT NULL DEFAULT ''`,
+		`CREATE TABLE IF NOT EXISTS points_ledger (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+			source TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			amount INTEGER NOT NULL,
+			awarded_by TEXT NOT NULL,
+			awarded_at TEXT NOT NULL,
+			UNIQUE(source, source_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_points_ledger_user ON points_ledger(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_points_ledger_room_user ON points_ledger(room_id, user_id)`,
 	})
 }
 
@@ -242,7 +269,7 @@ func (s *Store) CSRF(token string) string {
 }
 
 func (s *Store) RoomsFor(userID string) ([]domain.Room, error) {
-	rows, err := s.db.Query(`SELECT r.id, r.name, r.created_at, m.role
+	rows, err := s.db.Query(`SELECT r.id, r.name, r.created_at, m.role, r.leaderboard_visible
 		FROM rooms r JOIN memberships m ON m.room_id = r.id
 		WHERE m.user_id = ? ORDER BY r.created_at DESC`, userID)
 	if err != nil {
@@ -252,9 +279,11 @@ func (s *Store) RoomsFor(userID string) ([]domain.Room, error) {
 	var out []domain.Room
 	for rows.Next() {
 		var r domain.Room
-		if err := rows.Scan(&r.ID, &r.Name, &r.CreatedAt, &r.Role); err != nil {
+		var vis int
+		if err := rows.Scan(&r.ID, &r.Name, &r.CreatedAt, &r.Role, &vis); err != nil {
 			return nil, err
 		}
+		r.LeaderboardVisible = vis == 1
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -361,7 +390,8 @@ func (s *Store) mentorSummary(userID string) (domain.DashboardSummary, error) {
 }
 
 func (s *Store) learnerDashboardTasks(userID string) ([]domain.Task, error) {
-	rows, err := s.db.Query(`SELECT t.id, t.title, t.detail, t.status, r.name, t.due_date, t.created_at
+	rows, err := s.db.Query(`SELECT t.id, t.title, t.detail, t.status, r.name, t.assigned_to, t.due_date, t.created_at,
+			t.points_awarded, t.reviewed_at, t.reviewed_by
 		FROM tasks t
 		JOIN rooms r ON r.id = t.room_id
 		WHERE t.assigned_to = ? AND t.status != 'done'
@@ -374,7 +404,8 @@ func (s *Store) learnerDashboardTasks(userID string) ([]domain.Task, error) {
 	var out []domain.Task
 	for rows.Next() {
 		var t domain.Task
-		if err := rows.Scan(&t.ID, &t.Title, &t.Detail, &t.Status, &t.Assignee, &t.DueDate, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Title, &t.Detail, &t.Status, &t.Assignee, &t.AssigneeID, &t.DueDate, &t.CreatedAt,
+			&t.PointsAwarded, &t.ReviewedAt, &t.ReviewedBy); err != nil {
 			return nil, err
 		}
 		t.DueState = dueState(t.DueDate, t.Status, time.Now().UTC())
@@ -517,10 +548,23 @@ func (s *Store) CreateRoom(name, mentorID string) (string, error) {
 func (s *Store) RoomAccess(roomID, userID string) (domain.Room, string, bool) {
 	var rm domain.Room
 	var role string
-	err := s.db.QueryRow(`SELECT r.id, r.name, r.created_at, m.role
+	var vis int
+	err := s.db.QueryRow(`SELECT r.id, r.name, r.created_at, m.role, r.leaderboard_visible
 		FROM rooms r JOIN memberships m ON m.room_id = r.id
-		WHERE r.id = ? AND m.user_id = ?`, roomID, userID).Scan(&rm.ID, &rm.Name, &rm.CreatedAt, &role)
+		WHERE r.id = ? AND m.user_id = ?`, roomID, userID).Scan(&rm.ID, &rm.Name, &rm.CreatedAt, &role, &vis)
+	rm.LeaderboardVisible = vis == 1
 	return rm, role, err == nil
+}
+
+// SetRoomLeaderboardVisible toggles whether learners can see the full
+// per-room leaderboard. Mentor-only at the handler layer.
+func (s *Store) SetRoomLeaderboardVisible(roomID string, visible bool) error {
+	v := 0
+	if visible {
+		v = 1
+	}
+	_, err := s.db.Exec(`UPDATE rooms SET leaderboard_visible = ? WHERE id = ?`, v, roomID)
+	return err
 }
 
 // IsLearner reports whether userID is enrolled in roomID specifically as a
@@ -645,7 +689,31 @@ func (s *Store) RoomData(roomID, userID, role string) (domain.RoomData, error) {
 			st.OverdueTasks++
 		}
 	}
-	return domain.RoomData{Members: members, Reports: reports, Tasks: tasks, Invites: invites, Stats: st}, nil
+	board, err := s.RoomLeaderboard(roomID)
+	if err != nil {
+		return domain.RoomData{}, err
+	}
+	rank, err := s.UserRankInRoom(userID, roomID)
+	if err != nil {
+		return domain.RoomData{}, err
+	}
+	myPoints := 0
+	for _, e := range board {
+		if e.UserID == userID {
+			myPoints = e.Points
+			break
+		}
+	}
+	return domain.RoomData{
+		Members:     members,
+		Reports:     reports,
+		Tasks:       tasks,
+		Invites:     invites,
+		Stats:       st,
+		Leaderboard: board,
+		MyPoints:    myPoints,
+		MyRank:      rank,
+	}, nil
 }
 
 func (s *Store) Members(roomID string) ([]domain.Member, error) {
@@ -747,7 +815,8 @@ func (s *Store) CreateComment(reportID, userID, body string) error {
 }
 
 func (s *Store) Tasks(roomID, userID, role string) ([]domain.Task, error) {
-	query := `SELECT t.id, t.title, t.detail, t.status, u.name, t.due_date, t.created_at
+	query := `SELECT t.id, t.title, t.detail, t.status, u.name, u.id, t.due_date, t.created_at,
+			t.points_awarded, t.reviewed_at, t.reviewed_by
 		FROM tasks t JOIN users u ON u.id = t.assigned_to
 		WHERE t.room_id = ?`
 	args := []any{roomID}
@@ -755,7 +824,13 @@ func (s *Store) Tasks(roomID, userID, role string) ([]domain.Task, error) {
 		query += ` AND t.assigned_to = ?`
 		args = append(args, userID)
 	}
-	query += ` ORDER BY CASE WHEN t.status != 'done' AND t.due_date != '' AND t.due_date < date('now') THEN 0 WHEN t.status != 'done' AND t.due_date != '' THEN 1 WHEN t.status = 'todo' THEN 2 WHEN t.status = 'doing' THEN 3 ELSE 4 END, t.due_date ASC, t.created_at DESC`
+	query += ` ORDER BY CASE
+		WHEN t.status = 'done' AND t.reviewed_at = '' THEN 0
+		WHEN t.status != 'done' AND t.due_date != '' AND t.due_date < date('now') THEN 1
+		WHEN t.status != 'done' AND t.due_date != '' THEN 2
+		WHEN t.status = 'todo' THEN 3
+		WHEN t.status = 'doing' THEN 4
+		ELSE 5 END, t.due_date ASC, t.created_at DESC`
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -764,7 +839,8 @@ func (s *Store) Tasks(roomID, userID, role string) ([]domain.Task, error) {
 	var out []domain.Task
 	for rows.Next() {
 		var t domain.Task
-		if err := rows.Scan(&t.ID, &t.Title, &t.Detail, &t.Status, &t.Assignee, &t.DueDate, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Title, &t.Detail, &t.Status, &t.Assignee, &t.AssigneeID, &t.DueDate, &t.CreatedAt,
+			&t.PointsAwarded, &t.ReviewedAt, &t.ReviewedBy); err != nil {
 			return nil, err
 		}
 		t.DueState = dueState(t.DueDate, t.Status, time.Now().UTC())
@@ -824,7 +900,11 @@ func (s *Store) CreateTaskForLearners(roomID, assignedBy, title, detail, dueDate
 }
 
 func (s *Store) UpdateTaskStatus(roomID, taskID, userID, role, status string) (bool, error) {
-	res, err := s.db.Exec(`UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND room_id = ? AND (? = 'mentor' OR assigned_to = ?)`, status, auth.Now(), taskID, roomID, role, userID)
+	// reviewed_at = '' guard: once a mentor has awarded points, the task is
+	// closed and its status is no longer mutable.
+	res, err := s.db.Exec(`UPDATE tasks SET status = ?, updated_at = ?
+		WHERE id = ? AND room_id = ? AND reviewed_at = '' AND (? = 'mentor' OR assigned_to = ?)`,
+		status, auth.Now(), taskID, roomID, role, userID)
 	if err != nil {
 		return false, err
 	}
@@ -880,6 +960,143 @@ func (s *Store) DueTaskReminders(now time.Time, window time.Duration) ([]domain.
 func (s *Store) MarkTaskReminded(taskID string, at time.Time) error {
 	_, err := s.db.Exec(`UPDATE tasks SET last_reminded_at = ? WHERE id = ?`, at.UTC().Format(time.RFC3339), taskID)
 	return err
+}
+
+// NotificationPrefsFor returns the user's stored preferences, or a default
+// "off" preference if no row exists yet. Always returns a usable value.
+func (s *Store) NotificationPrefsFor(userID string) domain.NotificationPrefs {
+	prefs := domain.NotificationPrefs{
+		UserID:  userID,
+		Enabled: false,
+		Channel: domain.NotifChannelOff,
+	}
+	var enabled int
+	err := s.db.QueryRow(`SELECT enabled, channel, updated_at FROM notification_prefs WHERE user_id = ?`, userID).
+		Scan(&enabled, &prefs.Channel, &prefs.UpdatedAt)
+	if err != nil {
+		return prefs
+	}
+	prefs.Enabled = enabled == 1
+	return prefs
+}
+
+// SetNotificationPrefs upserts the user's preferences. Caller is expected to
+// validate channel is one of the allowed values.
+func (s *Store) SetNotificationPrefs(userID string, enabled bool, channel string) error {
+	e := 0
+	if enabled {
+		e = 1
+	}
+	_, err := s.db.Exec(`INSERT INTO notification_prefs(user_id, enabled, channel, updated_at)
+		VALUES(?,?,?,?)
+		ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled, channel=excluded.channel, updated_at=excluded.updated_at`,
+		userID, e, channel, auth.Now())
+	return err
+}
+
+// ReviewTask awards points (1-5) for a completed task. It runs in one
+// transaction: it sets reviewed_at/reviewed_by/points_awarded on the task
+// AND inserts the matching points_ledger row. The ledger row's
+// UNIQUE(source, source_id) constraint guarantees a task can only be awarded
+// once even under racing reviews.
+//
+// Returns (true, nil) when the award was recorded, (false, nil) when the
+// task is not eligible (not done, already reviewed, or not in this room),
+// and (_, err) on storage errors.
+func (s *Store) ReviewTask(roomID, taskID, mentorID string, points int) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	var assigneeID string
+	err = tx.QueryRow(`SELECT assigned_to FROM tasks
+		WHERE id = ? AND room_id = ? AND status = 'done' AND reviewed_at = ''`, taskID, roomID).Scan(&assigneeID)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	now := auth.Now()
+	if _, err := tx.Exec(`UPDATE tasks SET points_awarded = ?, reviewed_at = ?, reviewed_by = ?, updated_at = ?
+		WHERE id = ? AND room_id = ? AND reviewed_at = ''`,
+		points, now, mentorID, now, taskID, roomID); err != nil {
+		return false, err
+	}
+
+	ledgerID, err := auth.NewID()
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(`INSERT INTO points_ledger(id, user_id, room_id, source, source_id, amount, awarded_by, awarded_at)
+		VALUES(?,?,?,?,?,?,?,?)`,
+		ledgerID, assigneeID, roomID, "task", taskID, points, mentorID, now); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// UserPointsTotal sums all points the user has ever earned, across rooms.
+func (s *Store) UserPointsTotal(userID string) int {
+	var n int
+	_ = s.db.QueryRow(`SELECT COALESCE(SUM(amount), 0) FROM points_ledger WHERE user_id = ?`, userID).Scan(&n)
+	return n
+}
+
+// RoomLeaderboard returns every learner in the room ranked by points (desc).
+// Learners with zero points still appear so newcomers see themselves.
+func (s *Store) RoomLeaderboard(roomID string) ([]domain.LeaderboardEntry, error) {
+	rows, err := s.db.Query(`SELECT u.id, u.name,
+			COALESCE((SELECT SUM(amount) FROM points_ledger pl WHERE pl.user_id = u.id AND pl.room_id = ?), 0) AS points
+		FROM memberships m
+		JOIN users u ON u.id = m.user_id
+		WHERE m.room_id = ? AND m.role = ?
+		ORDER BY points DESC, u.name ASC`, roomID, roomID, domain.RoleLearner)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.LeaderboardEntry
+	rank := 0
+	prev := -1
+	for rows.Next() {
+		var e domain.LeaderboardEntry
+		if err := rows.Scan(&e.UserID, &e.Name, &e.Points); err != nil {
+			return nil, err
+		}
+		// Dense ranking: ties share a rank, next distinct score advances.
+		if e.Points != prev {
+			rank++
+			prev = e.Points
+		}
+		e.Rank = rank
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// UserRankInRoom returns the learner's 1-indexed position on the room
+// leaderboard along with the total number of learners. Position 0 means the
+// user has no recorded membership as a learner in the room.
+func (s *Store) UserRankInRoom(userID, roomID string) (domain.Rank, error) {
+	board, err := s.RoomLeaderboard(roomID)
+	if err != nil {
+		return domain.Rank{}, err
+	}
+	r := domain.Rank{Total: len(board)}
+	for _, entry := range board {
+		if entry.UserID == userID {
+			r.Position = entry.Rank
+			return r, nil
+		}
+	}
+	return r, nil
 }
 
 func dueState(dueDate, status string, now time.Time) string {

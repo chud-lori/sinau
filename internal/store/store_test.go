@@ -323,6 +323,114 @@ func TestTaskDueDateAndReminders(t *testing.T) {
 	}
 }
 
+func TestReviewTaskAwardsPointsOnce(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
+	code := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
+	learnerID, _ := joinLearner(t, st, code, "Learner", "learner@example.com")
+
+	if err := st.CreateTask(roomID, learnerID, mentorID, "Read RFC", "details", ""); err != nil {
+		t.Fatal(err)
+	}
+	tasks, _ := st.Tasks(roomID, learnerID, domain.RoleLearner)
+	if len(tasks) != 1 {
+		t.Fatalf("want 1 task, got %d", len(tasks))
+	}
+	taskID := tasks[0].ID
+
+	// Cannot review a task that is not yet done.
+	if ok, err := st.ReviewTask(roomID, taskID, mentorID, 4); err != nil || ok {
+		t.Fatalf("review pre-done should not award (ok=%v err=%v)", ok, err)
+	}
+
+	// Mark done, then review.
+	if _, err := st.UpdateTaskStatus(roomID, taskID, learnerID, domain.RoleLearner, "done"); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := st.ReviewTask(roomID, taskID, mentorID, 4)
+	if err != nil || !ok {
+		t.Fatalf("first review should succeed (ok=%v err=%v)", ok, err)
+	}
+	if got := st.UserPointsTotal(learnerID); got != 4 {
+		t.Fatalf("total points want 4, got %d", got)
+	}
+
+	// Second review must no-op (idempotent).
+	ok, err = st.ReviewTask(roomID, taskID, mentorID, 5)
+	if err != nil || ok {
+		t.Fatalf("re-review should not award (ok=%v err=%v)", ok, err)
+	}
+	if got := st.UserPointsTotal(learnerID); got != 4 {
+		t.Fatalf("total points unchanged after re-review, got %d", got)
+	}
+
+	// Reviewed tasks lock status.
+	updated, err := st.UpdateTaskStatus(roomID, taskID, mentorID, domain.RoleMentor, "todo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated {
+		t.Fatal("status change should be locked once reviewed")
+	}
+}
+
+func TestRoomLeaderboardOrderAndRank(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
+	codeA := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
+	codeB := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
+	codeC := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
+	learnerA, _ := joinLearner(t, st, codeA, "A", "a@example.com")
+	learnerB, _ := joinLearner(t, st, codeB, "B", "b@example.com")
+	learnerC, _ := joinLearner(t, st, codeC, "C", "c@example.com")
+
+	for who, pts := range map[string]int{learnerA: 5, learnerB: 3, learnerC: 5} {
+		if err := st.CreateTask(roomID, who, mentorID, "t", "", ""); err != nil {
+			t.Fatal(err)
+		}
+		tasks, _ := st.Tasks(roomID, who, domain.RoleLearner)
+		if _, err := st.UpdateTaskStatus(roomID, tasks[0].ID, who, domain.RoleLearner, "done"); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := st.ReviewTask(roomID, tasks[0].ID, mentorID, pts); err != nil || !ok {
+			t.Fatalf("review failed user=%s err=%v ok=%v", who, err, ok)
+		}
+	}
+	board, err := st.RoomLeaderboard(roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(board) != 3 {
+		t.Fatalf("want 3 entries, got %d", len(board))
+	}
+	if board[0].Rank != 1 || board[1].Rank != 1 || board[2].Rank != 2 {
+		t.Fatalf("dense ranking wrong: %+v", board)
+	}
+	rank, err := st.UserRankInRoom(learnerB, roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rank.Position != 2 || rank.Total != 3 {
+		t.Fatalf("learner B rank want 2/3, got %+v", rank)
+	}
+}
+
+func TestNotificationPrefsDefaultOff(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, _ := createUserRoom(t, st, "Mentor", "mentor@example.com")
+	prefs := st.NotificationPrefsFor(mentorID)
+	if prefs.Enabled || prefs.Channel != domain.NotifChannelOff {
+		t.Fatalf("default prefs not off: %+v", prefs)
+	}
+	if err := st.SetNotificationPrefs(mentorID, true, domain.NotifChannelEmail); err != nil {
+		t.Fatal(err)
+	}
+	prefs = st.NotificationPrefsFor(mentorID)
+	if !prefs.Enabled || prefs.Channel != domain.NotifChannelEmail {
+		t.Fatalf("prefs not persisted: %+v", prefs)
+	}
+}
+
 func TestRoleDashboards(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")

@@ -1,22 +1,25 @@
 // Package reminder periodically scans tasks with upcoming or overdue
-// deadlines and dispatches them through a pluggable Notifier.
+// deadlines and dispatches them through pluggable channels (log, email, and
+// later WhatsApp / etc.) based on each recipient's stored preferences.
 //
-// The Notifier interface is the only seam needed to wire real delivery
-// channels (email, WhatsApp, Telegram, Discord, web push, etc.) on top of the
-// existing task storage and dedup logic. Add new implementations alongside
-// LogNotifier in this package, then select them from cmd/sinau/main.go.
+// To wire a new delivery channel:
+//
+//  1. Add a new implementation of Notifier in this package (see EmailNotifier
+//     for the SMTP example).
+//  2. Register it under a channel name when constructing Worker in
+//     cmd/sinau/main.go.
+//  3. Document the channel name as a valid value for
+//     notification_prefs.channel in store.Migrate.
 //
 // Delivery contract:
 //
 //   - NotifyTaskDue MUST be safe to retry. The worker uses last_reminded_at
-//     to dedup to one notification per task per day, but if NotifyTaskDue
-//     succeeds and MarkTaskReminded then fails (e.g. DB hiccup), the same
-//     reminder may be sent again on the next tick.
-//   - NotifyTaskDue should respect the supplied context for cancellation
-//     and any per-call timeouts.
-//   - Returning a non-nil error skips MarkTaskReminded for that task so the
-//     next run will retry. Use this for transient failures (network, 5xx)
-//     and swallow permanent failures (bad address) internally.
+//     to dedup to one notification per task per day across all recipients,
+//     but a successful Notify + failed MarkTaskReminded leaves the same
+//     reminder eligible on the next tick.
+//   - Notifiers should respect ctx for cancellation and timeouts.
+//   - A non-nil error skips MarkTaskReminded for that task. Use it for
+//     transient transport errors; swallow permanent ones internally.
 package reminder
 
 import (
@@ -28,54 +31,52 @@ import (
 	"sinau/internal/store"
 )
 
-// Notifier delivers a single task-due notification. Implementations are
-// expected to be safe for concurrent use; the current worker calls them
-// serially but that is not part of the contract.
+// Recipient identifies who a notification is being sent to and how.
+// Channel is one of domain.NotifChannel* and must match a key in the
+// Worker's notifier registry, otherwise the message is dropped (logged).
+type Recipient struct {
+	UserID  string
+	Name    string
+	Email   string
+	Channel string
+	Role    string // "mentor" or "learner" — used by templates / future filters.
+}
+
+// Notifier delivers one task-due notification to one recipient via the
+// channel it implements. Implementations are expected to be safe for
+// concurrent use; the current worker calls them serially per task but that
+// is not part of the contract.
 type Notifier interface {
-	NotifyTaskDue(context.Context, domain.TaskReminder) error
+	NotifyTaskDue(ctx context.Context, to Recipient, rem domain.TaskReminder) error
 }
 
 // LogNotifier writes deadline reminders to the standard logger. It is the
-// default delivery channel and a useful stand-in until a real notifier is
-// configured.
+// safe default channel — registered both for "log" and as a fallback for
+// "email" when no SMTP config has been provided.
 type LogNotifier struct{}
 
-func (LogNotifier) NotifyTaskDue(ctx context.Context, rem domain.TaskReminder) error {
-	log.Printf("deadline reminder: task=%q due=%s room=%q learner=%q email=%s",
-		rem.Title, rem.DueDate, rem.RoomName, rem.AssigneeName, rem.AssigneeEmail)
+func (LogNotifier) NotifyTaskDue(_ context.Context, to Recipient, rem domain.TaskReminder) error {
+	log.Printf("reminder via=log channel=%s task=%q due=%s room=%q to=%q email=%s role=%s",
+		to.Channel, rem.Title, rem.DueDate, rem.RoomName, to.Name, to.Email, to.Role)
 	return nil
 }
 
-// MultiNotifier fans out one reminder to every wrapped notifier. It is the
-// recommended way to send the same alert to multiple channels (e.g. log +
-// email + WhatsApp). Errors from individual notifiers are logged and
-// swallowed so a single broken channel does not block delivery on the rest;
-// MultiNotifier itself always returns nil so the worker proceeds to mark the
-// task as reminded.
-type MultiNotifier []Notifier
-
-func (m MultiNotifier) NotifyTaskDue(ctx context.Context, rem domain.TaskReminder) error {
-	for _, n := range m {
-		if n == nil {
-			continue
-		}
-		if err := n.NotifyTaskDue(ctx, rem); err != nil {
-			log.Printf("notifier %T failed for task=%s: %v", n, rem.TaskID, err)
-		}
-	}
-	return nil
-}
-
+// Worker scans due tasks and routes one notification per recipient through
+// the appropriate channel notifier.
 type Worker struct {
-	store    *store.Store
-	notifier Notifier
-	every    time.Duration
-	window   time.Duration
+	store     *store.Store
+	notifiers map[string]Notifier
+	every     time.Duration
+	window    time.Duration
 }
 
-func NewWorker(store *store.Store, notifier Notifier, every, window time.Duration) *Worker {
-	if notifier == nil {
-		notifier = LogNotifier{}
+func NewWorker(s *store.Store, notifiers map[string]Notifier, every, window time.Duration) *Worker {
+	if notifiers == nil {
+		notifiers = map[string]Notifier{}
+	}
+	// Always provide a log channel so prefs.Channel="log" always works.
+	if _, ok := notifiers[domain.NotifChannelLog]; !ok {
+		notifiers[domain.NotifChannelLog] = LogNotifier{}
 	}
 	if every <= 0 {
 		every = time.Hour
@@ -83,7 +84,7 @@ func NewWorker(store *store.Store, notifier Notifier, every, window time.Duratio
 	if window <= 0 {
 		window = 24 * time.Hour
 	}
-	return &Worker{store: store, notifier: notifier, every: every, window: window}
+	return &Worker{store: s, notifiers: notifiers, every: every, window: window}
 }
 
 func (w *Worker) Run(ctx context.Context) {
@@ -111,12 +112,32 @@ func (w *Worker) runOnce(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := w.notifier.NotifyTaskDue(ctx, rem); err != nil {
-			log.Printf("deadline reminder send failed task=%s: %v", rem.TaskID, err)
-			continue
-		}
+		w.dispatch(ctx, rem)
 		if err := w.store.MarkTaskReminded(rem.TaskID, time.Now().UTC()); err != nil {
 			log.Printf("deadline reminder mark failed task=%s: %v", rem.TaskID, err)
 		}
+	}
+}
+
+func (w *Worker) dispatch(ctx context.Context, rem domain.TaskReminder) {
+	prefs := w.store.NotificationPrefsFor(rem.AssigneeID)
+	if !prefs.Enabled || prefs.Channel == domain.NotifChannelOff {
+		return
+	}
+	notifier, ok := w.notifiers[prefs.Channel]
+	if !ok {
+		log.Printf("no notifier registered for channel=%q user=%s", prefs.Channel, rem.AssigneeID)
+		return
+	}
+	to := Recipient{
+		UserID:  rem.AssigneeID,
+		Name:    rem.AssigneeName,
+		Email:   rem.AssigneeEmail,
+		Channel: prefs.Channel,
+		Role:    domain.RoleLearner,
+	}
+	if err := notifier.NotifyTaskDue(ctx, to, rem); err != nil {
+		log.Printf("reminder send failed channel=%s task=%s user=%s: %v",
+			prefs.Channel, rem.TaskID, rem.AssigneeID, err)
 	}
 }

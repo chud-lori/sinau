@@ -30,3 +30,18 @@ input:focus,textarea:focus,select:focus{outline:3px solid rgba(23,107,82,.16);bo
 .empty-state,.empty-inline{border:1px dashed #bfcbd8;border-radius:12px;padding:18px;background:#fbfcfd}.action-empty{background:linear-gradient(135deg,#fbfcfd,#f3f8f5)}.empty-state h2,.empty-inline strong{margin:0;color:var(--text)}.empty-inline p{margin:4px 0 0}
 .invite-result{margin-top:12px}code{background:#eef1f5;border-radius:4px;padding:2px 5px;word-break:break-all}.report-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.report-detail-grid section{border-top:1px solid var(--line);padding-top:14px}
 @media (max-width:860px){.landing-hero,.landing-strip,.dashboard-grid,.mentor-tools,.stats,.priority-panel,.priority-grid,.report-detail-grid,.create-room-band,.dash-home-hero,.mentor-summary,.home-grid{grid-template-columns:1fr}.dashboard-hero{padding:20px}.dashboard-hero h1,.dash-home-hero h1{font-size:34px}.landing-content h1{font-size:58px}.landing-visual{order:-2}.landing-dashboard{grid-column:auto;order:-1;width:100%;margin:-40px 0 0}.mock-grid{grid-template-columns:1fr 1fr}.mock-stat:last-child{display:none}.create-room-form{grid-template-columns:1fr}.progress-head{display:none}.progress-row{grid-template-columns:1fr;gap:6px;border:1px solid var(--line);border-radius:12px;margin-top:10px;padding:12px}.shell{padding:18px 14px 40px}.topbar{padding:0 14px}.table-head{display:none}.member-row{grid-template-columns:auto 1fr;gap:8px}.member-row span:nth-child(n+4){grid-column:2}.item-head,.report-title{display:grid}.auth-card{margin:24px auto;padding:20px}.user-chip{display:none}}
+
+.point-chip{background:#f5e9c1;color:#7a5400;border-color:#e9d488}
+.checkbox-row{display:flex;align-items:center;gap:10px}
+.rubric{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+.rubric-label{color:var(--muted);font-size:14px}
+.rubric button{padding:6px 12px;border-radius:999px;border:1px solid var(--line);background:#fff;cursor:pointer}
+.rubric button:hover{background:#fffaeb;border-color:#e9d488}
+.leaderboard{list-style:none;padding:0;margin:14px 0 0;display:grid;gap:8px}
+.leaderboard li{display:grid;grid-template-columns:60px 1fr auto;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:#fff}
+.leaderboard li.me{outline:2px solid #b58d2b;background:#fffaeb}
+.leaderboard .rank{font-weight:600;color:var(--muted)}
+.help-hero{padding:40px 24px}
+.help-section{margin-top:18px}
+.help-steps{padding-left:22px;line-height:1.7}
+.help-steps li{margin:6px 0}

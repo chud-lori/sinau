@@ -16,6 +16,9 @@
   {{if .User}}
   <nav>
     <span class="user-chip">{{.User.Name}}</span>
+    {{if gt .UserPoints 0}}<span class="pill point-chip" title="lifetime points">{{.UserPoints}} pts</span>{{end}}
+    <a href="/settings">Settings</a>
+    <a href="/help">Help</a>
     <form method="post" action="/logout">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <button class="link" type="submit">Logout</button>
@@ -23,6 +26,7 @@
   </nav>
   {{else}}
   <nav>
+    <a href="/help">Help</a>
     <a href="/login">Login</a>
     <a href="/join">Join</a>
     {{if .SetupNeeded}}<a class="nav-button" href="/setup">Set up</a>{{end}}
@@ -31,6 +35,7 @@
 </header>
 <main class="shell">
 {{if .Error}}<p class="alert error">{{.Error}}</p>{{end}}
+{{if .Notice}}<p class="alert">{{.Notice}}</p>{{end}}
 {{end}}
 
 {{define "layout_end"}}</main></body></html>{{end}}
@@ -339,17 +344,23 @@
         {{if .Detail}}<p>{{.Detail}}</p>{{end}}
         <p class="muted">Assigned to {{.Assignee}}</p>
         {{if .DueDate}}<p><span class="due-chip {{.DueState}}">Due {{.DueDate}}</span></p>{{end}}
-        <form class="task-update" method="post" action="/rooms/{{$.Room.ID}}/tasks/{{.ID}}/status">
-          <input type="hidden" name="csrf" value="{{$.CSRF}}">
-          <select name="status" aria-label="Task status">
-            <option value="todo" {{if eq .Status "todo"}}selected{{end}}>todo</option>
-            <option value="doing" {{if eq .Status "doing"}}selected{{end}}>doing</option>
-            <option value="done" {{if eq .Status "done"}}selected{{end}}>done</option>
-          </select>
-          <button type="submit">Update</button>
-        </form>
+        {{if .ReviewedAt}}
+          <p><span class="pill point-chip">Reviewed · {{.PointsAwarded}} / 5</span></p>
+        {{else if eq .Status "done"}}
+          <p class="muted">Awaiting mentor review.</p>
+        {{else}}
+          <form class="task-update" method="post" action="/rooms/{{$.Room.ID}}/tasks/{{.ID}}/status">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <select name="status" aria-label="Task status">
+              <option value="todo" {{if eq .Status "todo"}}selected{{end}}>todo</option>
+              <option value="doing" {{if eq .Status "doing"}}selected{{end}}>doing</option>
+              <option value="done" {{if eq .Status "done"}}selected{{end}}>done</option>
+            </select>
+            <button type="submit">Update</button>
+          </form>
+        {{end}}
       </article>
-    {{else}}<div class="empty-inline action-empty"><strong>No tasks yet</strong><p class="muted">Create a concrete next action after reviewing a report.</p></div>{{end}}
+    {{else}}<div class="empty-inline action-empty"><strong>No tasks yet for you</strong><p class="muted">Your mentor will assign tasks here. Tasks become reviewable once you mark them <em>done</em>.</p></div>{{end}}
   </section>
 </div>
 {{else}}
@@ -398,9 +409,22 @@
         {{if .Detail}}<p>{{.Detail}}</p>{{end}}
         <p class="muted">Assigned to {{.Assignee}}</p>
         {{if .DueDate}}<p><span class="due-chip {{.DueState}}">Due {{.DueDate}}</span></p>{{end}}
+        {{if .ReviewedAt}}
+          <p><span class="pill point-chip">Awarded {{.PointsAwarded}} / 5</span></p>
+        {{else if eq .Status "done"}}
+          <form class="rubric" method="post" action="/rooms/{{$.Room.ID}}/tasks/{{.ID}}/review">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <span class="rubric-label">Award points:</span>
+            <button type="submit" name="points" value="1" title="needs more work">1</button>
+            <button type="submit" name="points" value="2">2</button>
+            <button type="submit" name="points" value="3" title="good">3</button>
+            <button type="submit" name="points" value="4">4</button>
+            <button type="submit" name="points" value="5" title="exceptional">5</button>
+          </form>
+        {{end}}
       </article>
     {{else}}
-      <div class="empty-inline action-empty"><strong>No open tasks</strong><p class="muted">Assign tasks after reviewing learner reports.</p></div>
+      <div class="empty-inline action-empty"><strong>No open tasks</strong><p class="muted">Assign a task below. Once a learner marks it <em>done</em>, you can award 1–5 points using the same scale every time.</p></div>
     {{end}}
   </section>
 </div>
@@ -451,7 +475,43 @@
     <p class="muted">Invite a learner to this room before assigning tasks.</p>
     {{end}}
   </section>
+
+  <section class="panel" id="room-settings">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Room settings</p>
+        <h2>Cohort options</h2>
+      </div>
+    </div>
+    <form method="post" action="/rooms/{{.Room.ID}}/settings" class="stack">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <label class="checkbox-row">
+        <input type="checkbox" name="leaderboard_visible" {{if .Room.LeaderboardVisible}}checked{{end}}>
+        Show the leaderboard to all learners in this room
+      </label>
+      <p class="muted">Off: each learner only sees their own score and rank. On: every learner sees the full cohort ranking. You always see the full leaderboard below.</p>
+      <button type="submit">Save room settings</button>
+    </form>
+  </section>
 </div>
+
+<section class="panel" id="leaderboard">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">Gamification</p>
+      <h2>Leaderboard</h2>
+    </div>
+  </div>
+  {{if .Leaderboard}}
+  <ol class="leaderboard">
+    {{range .Leaderboard}}
+      <li><span class="rank">#{{.Rank}}</span><strong>{{.Name}}</strong><span class="pill point-chip">{{.Points}} pts</span></li>
+    {{end}}
+  </ol>
+  {{else}}
+  <div class="empty-inline"><strong>No points awarded yet</strong><p class="muted">Review completed tasks on the same 1–5 scale to populate the leaderboard.</p></div>
+  {{end}}
+</section>
 
 <section class="panel" id="members">
   <div class="section-head">
@@ -476,6 +536,31 @@
 {{end}}
 
 {{if eq .Room.Role "learner"}}
+<section class="panel" id="my-progress">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">Your score</p>
+      <h2>Points in this room</h2>
+    </div>
+  </div>
+  <div class="mentor-summary learner-summary">
+    <div><span>Points</span><strong>{{.MyPoints}}</strong></div>
+    {{if gt .MyRank.Total 0}}
+      <div><span>Rank</span><strong>#{{.MyRank.Position}} of {{.MyRank.Total}}</strong></div>
+    {{end}}
+  </div>
+  {{if .Leaderboard}}
+    <p class="muted">Your mentor has made the leaderboard visible to everyone in this room.</p>
+    <ol class="leaderboard">
+      {{range .Leaderboard}}
+        <li {{if eq .UserID $.User.ID}}class="me"{{end}}><span class="rank">#{{.Rank}}</span><strong>{{.Name}}</strong><span class="pill point-chip">{{.Points}} pts</span></li>
+      {{end}}
+    </ol>
+  {{else}}
+    <p class="muted">Points are awarded after your mentor reviews completed tasks on a 1–5 scale. Same scale across every task, so ranks stay comparable.</p>
+  {{end}}
+</section>
+
 <section class="panel" id="reports">
   <div class="section-head">
     <div>
@@ -543,5 +628,79 @@
     <label>Comment <textarea name="body" required placeholder="Write feedback, ask a clarifying question, or confirm the next step"></textarea></label>
     <button type="submit">Comment</button>
   </form>
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "settings"}}{{template "layout_start" .}}
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">Account</p>
+      <h2>Notification settings</h2>
+    </div>
+  </div>
+  <p class="muted">Choose how Sinau pings you about task deadlines. Notifications are off by default — turn them on to start receiving reminders.</p>
+  <form method="post" action="/settings" class="stack">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label class="checkbox-row">
+      <input type="checkbox" name="enabled" {{if .Prefs.Enabled}}checked{{end}}>
+      Send me deadline reminders
+    </label>
+    <label>Channel
+      <select name="channel">
+        <option value="off" {{if eq .Prefs.Channel "off"}}selected{{end}}>Off</option>
+        <option value="email" {{if eq .Prefs.Channel "email"}}selected{{end}}>Email — {{.User.Email}}</option>
+        <option value="log" {{if eq .Prefs.Channel "log"}}selected{{end}}>Log only (dev / admin debugging)</option>
+      </select>
+    </label>
+    <p class="muted">Reminders go out at most once per task per day. Mentors get notifications for tasks they have assigned; learners get them for tasks assigned to them. If the channel is not yet configured by the operator (e.g. no SMTP server), email reminders quietly fall back to the server log.</p>
+    <button type="submit">Save settings</button>
+  </form>
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "help"}}{{template "layout_start" .}}
+<section class="landing-hero help-hero">
+  <div class="landing-content">
+    <p class="eyebrow">Getting started</p>
+    <h1>How Sinau works</h1>
+    <p class="landing-lede">Sinau is a private, mentor-led learning tracker. Mentors guide cohorts, learners submit weekly progress, and points are awarded after a quick review.</p>
+    <div class="landing-actions">
+      {{if .SetupNeeded}}<a class="button primary" href="/setup">Create first room</a>{{end}}
+      {{if not .User}}<a class="button secondary" href="/login">Login</a><a class="button secondary" href="/join">Join with invite</a>{{end}}
+    </div>
+  </div>
+</section>
+
+<section class="panel help-section">
+  <div class="section-head"><div><p class="eyebrow">Role guide</p><h2>If you are a mentor</h2></div></div>
+  <ol class="help-steps">
+    <li><strong>Set up</strong> the first mentor account and your first room (only the first user can do this).</li>
+    <li><strong>Invite learners</strong> from the room page — each code is single-use and expires after seven days.</li>
+    <li><strong>Review reports.</strong> Learners post weekly check-ins. Comment, flag blockers, keep them moving.</li>
+    <li><strong>Assign tasks</strong> with optional deadlines. Pick a single learner or "All learners" to fan one task out to every learner in the room.</li>
+    <li><strong>Review completed tasks</strong> on a fixed <em>1–5 scale</em> (1 = needs more work, 3 = good, 5 = exceptional). Same scale across every task → leaderboards stay comparable.</li>
+    <li><strong>Toggle the leaderboard</strong> for each cohort in <em>Room settings</em> — off keeps it private, on shows the full ranking to learners.</li>
+  </ol>
+</section>
+
+<section class="panel help-section">
+  <div class="section-head"><div><p class="eyebrow">Role guide</p><h2>If you are a learner</h2></div></div>
+  <ol class="help-steps">
+    <li><strong>Join</strong> with the invite code your mentor sent you.</li>
+    <li><strong>Submit progress</strong> regularly — what you learned, practiced, your blocker (if any), and the next concrete step.</li>
+    <li><strong>Work through tasks</strong>: move them <code>todo → doing → done</code>. Once <em>done</em>, your mentor reviews and awards points.</li>
+    <li><strong>Track your score</strong> on the room page. If the mentor has enabled it for the cohort, you also see the leaderboard.</li>
+  </ol>
+</section>
+
+<section class="panel help-section">
+  <div class="section-head"><div><p class="eyebrow">Stay in the loop</p><h2>Notifications</h2></div></div>
+  <p>Reminders are off by default. Open <a href="/settings">Settings</a> after logging in to enable deadline reminders and pick a channel (email is the standard option). Both mentors and learners can opt in — only the ones who turn it on get pinged. Reminders fire at most once per task per day.</p>
+</section>
+
+<section class="panel help-section">
+  <div class="section-head"><div><p class="eyebrow">Why points</p><h2>Gamification, fairly</h2></div></div>
+  <p>Every task is reviewed on the same 1–5 rubric, so cohort leaderboards reflect output rather than how generous a particular mentor is feeling. Mentors set leaderboard visibility per room.</p>
 </section>
 {{template "layout_end" .}}{{end}}

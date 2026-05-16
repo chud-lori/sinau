@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,25 +36,31 @@ type ctxKey string
 const userKey ctxKey = "user"
 
 type PageData struct {
-	Title         string
-	User          *domain.User
-	CSRF          string
-	Error         string
-	SetupNeeded   bool
-	Rooms         []domain.Room
-	Room          domain.Room
-	Members       []domain.Member
-	Reports       []domain.Report
-	Report        domain.Report
-	Comments      []domain.Comment
-	Tasks         []domain.Task
-	Invites       []domain.Invite
-	InviteCode    string
-	JoinCode      string
-	Stats         domain.Stats
-	RoomLearners  []domain.Member
-	MentorDash    domain.MentorDashboard
-	LearnerDash   domain.LearnerDashboard
+	Title        string
+	User         *domain.User
+	CSRF         string
+	Error        string
+	Notice       string
+	SetupNeeded  bool
+	UserPoints   int
+	Rooms        []domain.Room
+	Room         domain.Room
+	Members      []domain.Member
+	Reports      []domain.Report
+	Report       domain.Report
+	Comments     []domain.Comment
+	Tasks        []domain.Task
+	Invites      []domain.Invite
+	InviteCode   string
+	JoinCode     string
+	Stats        domain.Stats
+	RoomLearners []domain.Member
+	Leaderboard  []domain.LeaderboardEntry
+	MyPoints     int
+	MyRank       domain.Rank
+	MentorDash   domain.MentorDashboard
+	LearnerDash  domain.LearnerDashboard
+	Prefs        domain.NotificationPrefs
 }
 
 func New(cfg Config) (*Server, error) {
@@ -94,6 +101,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /rooms/{roomID}/reports/{reportID}/comments", s.auth(s.createComment))
 	mux.HandleFunc("POST /rooms/{roomID}/tasks", s.auth(s.createTask))
 	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/status", s.auth(s.updateTask))
+	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/review", s.auth(s.reviewTask))
+	mux.HandleFunc("POST /rooms/{roomID}/settings", s.auth(s.updateRoomSettings))
+	mux.HandleFunc("GET /settings", s.auth(s.settingsPage))
+	mux.HandleFunc("POST /settings", s.auth(s.updateSettings))
+	mux.HandleFunc("GET /help", s.withUser(s.helpPage))
 	return securityHeaders(mux)
 }
 
@@ -171,6 +183,21 @@ func (s *Server) rateLimit(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// pageData seeds a PageData with the bits every authenticated page needs:
+// the current user, a session-scoped CSRF token, and their lifetime points
+// total (used by the topbar chip). Handlers extend it with page-specific
+// fields.
+func (s *Server) pageData(r *http.Request, title string) PageData {
+	u := current(r)
+	pd := PageData{Title: title}
+	if u != nil {
+		pd.User = u
+		pd.CSRF = s.csrfFor(r)
+		pd.UserPoints = s.store.UserPointsTotal(u.ID)
+	}
+	return pd
+}
+
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	u := current(r)
 	if u == nil {
@@ -183,7 +210,10 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 			s.serverError(w, err)
 			return
 		}
-		s.render(w, "mentor_home", PageData{Title: "Mentor Dashboard", User: u, CSRF: s.csrfFor(r), Rooms: dash.Rooms, MentorDash: dash})
+		pd := s.pageData(r, "Mentor Dashboard")
+		pd.Rooms = dash.Rooms
+		pd.MentorDash = dash
+		s.render(w, "mentor_home", pd)
 		return
 	}
 	dash, err := s.store.LearnerDashboard(u.ID)
@@ -191,7 +221,10 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
-	s.render(w, "learner_home", PageData{Title: "My Progress", User: u, CSRF: s.csrfFor(r), Rooms: dash.Rooms, LearnerDash: dash})
+	pd := s.pageData(r, "My Progress")
+	pd.Rooms = dash.Rooms
+	pd.LearnerDash = dash
+	s.render(w, "learner_home", pd)
 }
 
 func (s *Server) setupForm(w http.ResponseWriter, r *http.Request) {
@@ -348,7 +381,22 @@ func (s *Server) roomPage(w http.ResponseWriter, r *http.Request) {
 			learners = append(learners, m)
 		}
 	}
-	s.render(w, "room", PageData{Title: rm.Name, User: u, CSRF: s.csrfFor(r), Room: rm, Members: data.Members, RoomLearners: learners, Reports: data.Reports, Tasks: data.Tasks, Invites: data.Invites, Stats: data.Stats})
+	pd := s.pageData(r, rm.Name)
+	pd.Room = rm
+	pd.Members = data.Members
+	pd.RoomLearners = learners
+	pd.Reports = data.Reports
+	pd.Tasks = data.Tasks
+	pd.Invites = data.Invites
+	pd.Stats = data.Stats
+	pd.MyPoints = data.MyPoints
+	pd.MyRank = data.MyRank
+	// Mentor always sees the full leaderboard; learners only see it when
+	// the room owner has flipped the visibility toggle.
+	if role == domain.RoleMentor || rm.LeaderboardVisible {
+		pd.Leaderboard = data.Leaderboard
+	}
+	s.render(w, "room", pd)
 }
 
 func (s *Server) createInvite(w http.ResponseWriter, r *http.Request) {
@@ -426,7 +474,11 @@ func (s *Server) reportPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rm.Role = role
-	s.render(w, "report", PageData{Title: "Report", User: u, CSRF: s.csrfFor(r), Room: rm, Report: rep, Comments: comments})
+	pd := s.pageData(r, "Report")
+	pd.Room = rm
+	pd.Report = rep
+	pd.Comments = comments
+	s.render(w, "report", pd)
 }
 
 func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
@@ -527,6 +579,85 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
+func (s *Server) reviewTask(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, taskID := r.PathValue("roomID"), r.PathValue("taskID")
+	_, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok || role != domain.RoleMentor {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	points, err := strconv.Atoi(r.FormValue("points"))
+	if err != nil || points < 1 || points > 5 {
+		http.Error(w, "score must be an integer 1-5", http.StatusBadRequest)
+		return
+	}
+	awarded, err := s.store.ReviewTask(roomID, taskID, u.ID, points)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if !awarded {
+		http.Error(w, "task is not awaiting review", http.StatusConflict)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
+func (s *Server) updateRoomSettings(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID := r.PathValue("roomID")
+	_, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok || role != domain.RoleMentor {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	visible := r.FormValue("leaderboard_visible") == "on" || r.FormValue("leaderboard_visible") == "1"
+	if err := s.store.SetRoomLeaderboardVisible(roomID, visible); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
+func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	pd := s.pageData(r, "Settings")
+	pd.Prefs = s.store.NotificationPrefsFor(u.ID)
+	if notice := r.URL.Query().Get("saved"); notice == "1" {
+		pd.Notice = "Notification settings saved."
+	}
+	s.render(w, "settings", pd)
+}
+
+func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	enabled := r.FormValue("enabled") == "on" || r.FormValue("enabled") == "1"
+	channel := r.FormValue("channel")
+	switch channel {
+	case domain.NotifChannelOff, domain.NotifChannelEmail, domain.NotifChannelLog:
+		// allowed
+	default:
+		http.Error(w, "invalid channel", http.StatusBadRequest)
+		return
+	}
+	if !enabled {
+		// Off-switch normalises channel for consistency.
+		channel = domain.NotifChannelOff
+	}
+	if err := s.store.SetNotificationPrefs(u.ID, enabled, channel); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/settings?saved=1", http.StatusSeeOther)
+}
+
+func (s *Server) helpPage(w http.ResponseWriter, r *http.Request) {
+	pd := s.pageData(r, "How Sinau Works")
+	pd.SetupNeeded = s.store.UserCount() == 0
+	s.render(w, "help", pd)
 }
 
 func (s *Server) issueSession(w http.ResponseWriter, userID string) error {

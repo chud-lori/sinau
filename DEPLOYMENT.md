@@ -85,7 +85,11 @@ SINAU_SECURE_COOKIE=true
 SINAU_REMINDERS=true
 SINAU_REMINDER_INTERVAL=1h
 SINAU_REMINDER_WINDOW=24h
-SINAU_NOTIFIER=log
+SINAU_SMTP_HOST=smtp.example.com:587
+SINAU_SMTP_USER=sinau@example.com
+SINAU_SMTP_PASS=app-specific-password
+SINAU_SMTP_FROM=sinau@example.com
+SINAU_SMTP_STARTTLS=true
 ```
 
 Lock it down:
@@ -278,15 +282,32 @@ Controls:
 SINAU_REMINDERS=true
 SINAU_REMINDER_INTERVAL=1h
 SINAU_REMINDER_WINDOW=24h
-SINAU_NOTIFIER=log
+SINAU_SMTP_HOST=smtp.example.com:587
+SINAU_SMTP_USER=sinau@example.com
+SINAU_SMTP_PASS=app-specific-password
+SINAU_SMTP_FROM=sinau@example.com
+SINAU_SMTP_STARTTLS=true
 ```
 
-`SINAU_NOTIFIER` selects the delivery channel. Only `log` is implemented
-today. To plug in email, WhatsApp, Telegram, or Discord, add a new
-`reminder.Notifier` implementation and a case in `buildNotifier` in
-`cmd/sinau/main.go`. Multiple channels can be fanned out via
-`reminder.MultiNotifier`. The deadline scan, dedup window
-(`last_reminded_at`), and task storage do not change.
+The reminder worker dispatches one notification per due task per recipient,
+based on each user's preference at `/settings`. Channels currently
+implemented: `off`, `email` (SMTP), and `log` (server log; useful for dev /
+admin debugging). Recipients with no row default to `off`, so nobody is
+spammed without opting in.
+
+To plug a new channel (e.g. WhatsApp via the
+`aldinokemal/go-whatsapp-web-multidevice` REST daemon, Telegram, or
+Discord):
+
+1. Add a `reminder.Notifier` implementation in `internal/reminder/`.
+2. Register it under a new key in
+   `cmd/sinau/main.go:buildNotifiers`.
+3. Add the new value to the CHECK constraint on
+   `notification_prefs.channel` in `internal/store/store.go:Migrate` (new
+   migration) and to the `/settings` form.
+
+The deadline scan, `last_reminded_at` dedup, and task storage do not
+change.
 
 Disable reminders:
 
