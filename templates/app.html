@@ -36,7 +36,10 @@
       <form method="get" action="/search" class="topbar-search" role="search">
         <input name="q" type="search" maxlength="200" value="{{.SearchQuery}}" placeholder="{{.T "nav.search"}}" aria-label="{{.T "nav.search"}}">
       </form>
-      <a class="user-chip" href="/profile">{{.User.Name}}</a>
+      <a class="user-chip" href="/profile" aria-label="{{.T "nav.profile"}}">
+        <span class="avatar sm avatar-c{{.AvatarBucket .User.ID}}" aria-hidden="true">{{.Initials .User.Name}}</span>
+        <span>{{.User.Name}}</span>
+      </a>
       {{if gt .UserPoints 0}}<span class="pill point-chip" title="{{.T "nav.points.title"}}">{{.Tf "nav.points" .UserPoints}}</span>{{end}}
       {{if .NotificationsEnabled}}<a href="/settings">{{.T "nav.settings"}}</a>{{end}}
       <a href="/help">{{.T "nav.help"}}</a>
@@ -231,9 +234,12 @@
     {{range .MentorDash.AttentionItems}}
       <a class="attention-row {{.Kind}}" href="/rooms/{{.RoomID}}">
         <span class="attention-kind">{{.Kind}}</span>
-        <div>
-          <strong>{{.UserName}} · {{.RoomName}}</strong>
-          <p>{{.Title}}{{if .DueDate}} · {{$.T "mentor.attention.due"}} {{.DueDate}}{{end}}</p>
+        <div class="attention-body">
+          <span class="avatar sm avatar-c{{$.AvatarBucket .UserID}}" aria-hidden="true">{{$.Initials .UserName}}</span>
+          <div>
+            <strong>{{.UserName}} · {{.RoomName}}</strong>
+            <p>{{.Title}}{{if .DueDate}} · {{$.T "mentor.attention.due"}} {{.DueDate}}{{end}}</p>
+          </div>
         </div>
       </a>
     {{else}}
@@ -269,7 +275,7 @@
     <div class="progress-head"><span>{{.T "mentor.mentees.col.mentee"}}</span><span>{{.T "mentor.mentees.col.room"}}</span><span>{{.T "mentor.mentees.col.last"}}</span><span>{{.T "mentor.mentees.col.tasks"}}</span><span>{{.T "mentor.mentees.col.status"}}</span></div>
     {{range .MentorDash.Mentees}}
       <a class="progress-row" href="/rooms/{{.RoomID}}">
-        <span><strong>{{.Name}}</strong><small>{{$.Tf "mentor.mentees.reports_week" .ReportsThisWeek}}</small></span>
+        <span class="progress-mentee"><span class="avatar sm avatar-c{{$.AvatarBucket .UserID}}" aria-hidden="true">{{$.Initials .Name}}</span><span><strong>{{.Name}}</strong><small>{{$.Tf "mentor.mentees.reports_week" .ReportsThisWeek}}</small></span></span>
         <span>{{.RoomName}}</span>
         <span>{{if .LastReport}}{{.LastReport}}{{else}}{{$.T "mentor.mentees.no_report"}}{{end}}</span>
         <span>{{$.Tf "mentor.mentees.tasks_state" .OpenTasks .OverdueTasks}}</span>
@@ -324,7 +330,7 @@
   <div class="section-head"><div><p class="eyebrow">{{.T "mentee.reports.eyebrow"}}</p><h2>{{.T "mentee.reports.title"}}</h2></div></div>
   {{range .MenteeDash.RecentReports}}
     <article class="report-card {{if .Blocker}}has-blocker{{end}}">
-      <div class="item-head"><div><strong>{{.Author}}</strong><p class="muted">{{.CreatedAt}}</p></div><span class="comment-link">{{$.Tf "room.comments" .Comments}}</span></div>
+      <div class="item-head"><div class="author-line"><span class="avatar sm avatar-c{{$.AvatarBucket .UserID}}" aria-hidden="true">{{$.Initials .Author}}</span><div><strong>{{.Author}}</strong><p class="muted">{{.CreatedAt}}</p></div></div><span class="comment-link">{{$.Tf "room.comments" .Comments}}</span></div>
       {{if .Blocker}}<p class="blocker">{{$.Tf "room.blocker.label" .Blocker}}</p>{{end}}
       <p>{{.Learned}}</p>
     </article>
@@ -405,9 +411,12 @@
   {{range .Reports}}
     <article class="report-card {{if .Blocker}}has-blocker{{end}}">
       <div class="item-head">
-        <div>
-          <strong>{{.Author}}</strong>
-          <p class="muted">{{.CreatedAt}}{{if .EditedAt}} · {{$.Tf "edited.indicator.with" .EditedAt}}{{end}}</p>
+        <div class="author-line">
+          <span class="avatar sm avatar-c{{$.AvatarBucket .UserID}}" aria-hidden="true">{{$.Initials .Author}}</span>
+          <div>
+            <strong>{{.Author}}</strong>
+            <p class="muted">{{.CreatedAt}}{{if .EditedAt}} · {{$.Tf "edited.indicator.with" .EditedAt}}{{end}}</p>
+          </div>
         </div>
         <a class="comment-link" href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.Tf "room.comments" .Comments}}</a>
       </div>
@@ -583,9 +592,12 @@
   {{range .Submissions}}
     <article class="submission-card">
       <div class="item-head">
-        <div>
-          <strong>{{.StudentName}}</strong>
-          <p class="muted"><a href="/rooms/{{$.Room.ID}}/tasks/{{.TaskID}}">{{.TaskTitle}}</a> · {{.SubmittedAt}}</p>
+        <div class="author-line">
+          <span class="avatar sm avatar-c{{$.AvatarBucket .StudentID}}" aria-hidden="true">{{$.Initials .StudentName}}</span>
+          <div>
+            <strong>{{.StudentName}}</strong>
+            <p class="muted"><a href="/rooms/{{$.Room.ID}}/tasks/{{.TaskID}}">{{.TaskTitle}}</a> · {{.SubmittedAt}}</p>
+          </div>
         </div>
         <span class="status {{.Status}}">{{$.T (printf "room.work.status.%s" .Status)}}</span>
       </div>
@@ -625,7 +637,7 @@
   {{if .Leaderboard}}
   <ol class="leaderboard">
     {{range .Leaderboard}}
-      <li><span class="rank">#{{.Rank}}</span><strong>{{.Name}}</strong><span class="pill point-chip">{{$.Tf "room.leaderboard.pts" .Points}}</span></li>
+      <li><span class="rank">#{{.Rank}}</span><span class="avatar sm avatar-c{{$.AvatarBucket .UserID}}" aria-hidden="true">{{$.Initials .Name}}</span><strong>{{.Name}}</strong><span class="pill point-chip">{{$.Tf "room.leaderboard.pts" .Points}}</span></li>
     {{end}}
   </ol>
   {{else}}
@@ -645,7 +657,7 @@
     <div class="table-head"><span>{{.T "room.members.col.name"}}</span><span>{{.T "room.members.col.role"}}</span><span>{{if eq .Room.Mode "classroom"}}{{.T "room.members.col.email"}}{{else}}{{.T "room.members.col.last"}}{{end}}</span><span>{{.T "room.members.col.tasks"}}</span></div>
     {{range .Members}}
     <div class="member-row">
-      <span class="member-avatar">{{printf "%.1s" .Name}}</span>
+      <span class="avatar avatar-c{{$.AvatarBucket .UserID}}" aria-hidden="true">{{$.Initials .Name}}</span>
       <strong>{{.Name}}</strong>
       <span class="pill">{{$.RoleLabel $.Room.Mode .Role}}</span>
       <span>{{if eq $.Room.Mode "classroom"}}{{.Email}}{{else}}{{if .LastReport}}{{.LastReport}}{{else}}{{$.T "room.members.no_report"}}{{end}}{{end}}</span>
@@ -675,7 +687,7 @@
       <p class="muted">{{.T "room.score.visible"}}</p>
       <ol class="leaderboard">
         {{range .Leaderboard}}
-          <li {{if eq .UserID $.User.ID}}class="me"{{end}}><span class="rank">#{{.Rank}}</span><strong>{{.Name}}</strong><span class="pill point-chip">{{$.Tf "room.leaderboard.pts" .Points}}</span></li>
+          <li {{if eq .UserID $.User.ID}}class="me"{{end}}><span class="rank">#{{.Rank}}</span><span class="avatar sm avatar-c{{$.AvatarBucket .UserID}}" aria-hidden="true">{{$.Initials .Name}}</span><strong>{{.Name}}</strong><span class="pill point-chip">{{$.Tf "room.leaderboard.pts" .Points}}</span></li>
         {{end}}
       </ol>
     {{else}}
@@ -697,9 +709,12 @@
   {{range .Reports}}
     <article class="report-card {{if .Blocker}}has-blocker{{end}}">
       <div class="item-head">
-        <div>
-          <strong>{{.Author}}</strong>
-          <p class="muted">{{.CreatedAt}}{{if .EditedAt}} · {{$.Tf "edited.indicator.with" .EditedAt}}{{end}}</p>
+        <div class="author-line">
+          <span class="avatar sm avatar-c{{$.AvatarBucket .UserID}}" aria-hidden="true">{{$.Initials .Author}}</span>
+          <div>
+            <strong>{{.Author}}</strong>
+            <p class="muted">{{.CreatedAt}}{{if .EditedAt}} · {{$.Tf "edited.indicator.with" .EditedAt}}{{end}}</p>
+          </div>
         </div>
         <a class="comment-link" href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.Tf "room.comments" .Comments}}</a>
       </div>
@@ -809,7 +824,10 @@
   {{range .Submissions}}
     <article class="submission-card">
       <div class="item-head">
-        <div><strong>{{.StudentName}}</strong><p class="muted">{{.SubmittedAt}}</p></div>
+        <div class="author-line">
+          <span class="avatar sm avatar-c{{$.AvatarBucket .StudentID}}" aria-hidden="true">{{$.Initials .StudentName}}</span>
+          <div><strong>{{.StudentName}}</strong><p class="muted">{{.SubmittedAt}}</p></div>
+        </div>
         <span class="status {{.Status}}">{{$.T (printf "room.work.status.%s" .Status)}}</span>
       </div>
       {{if .Note}}<p>{{.Note}}</p>{{end}}
@@ -859,10 +877,13 @@
 <p><a class="back-link" href="/rooms/{{.Room.ID}}">{{.Tf "report.back" .Room.Name}}</a></p>
 <section class="panel">
   <div class="report-title">
-    <div>
-      <p class="eyebrow">{{.T "report.eyebrow"}}</p>
-      <h1>{{.Report.Author}}</h1>
-      <p class="muted">{{.Report.CreatedAt}}{{if .Report.EditedAt}} · {{.Tf "edited.indicator.with" .Report.EditedAt}}{{end}}</p>
+    <div class="report-title-head">
+      <span class="avatar lg avatar-c{{.AvatarBucket .Report.UserID}}" aria-hidden="true">{{.Initials .Report.Author}}</span>
+      <div>
+        <p class="eyebrow">{{.T "report.eyebrow"}}</p>
+        <h1>{{.Report.Author}}</h1>
+        <p class="muted">{{.Report.CreatedAt}}{{if .Report.EditedAt}} · {{.Tf "edited.indicator.with" .Report.EditedAt}}{{end}}</p>
+      </div>
     </div>
     {{if .Report.Blocker}}<span class="status attention">{{.T "report.status.blocked"}}</span>{{end}}
   </div>
@@ -891,7 +912,10 @@
     </div>
   </div>
   {{range .Comments}}<article class="comment-card">
-    <strong>{{.Author}}</strong>
+    <div class="author-line">
+      <span class="avatar sm avatar-c{{$.AvatarBucket .AuthorID}}" aria-hidden="true">{{$.Initials .Author}}</span>
+      <strong>{{.Author}}</strong>
+    </div>
     <p>{{.Body}}</p>
     <p class="muted">{{.CreatedAt}}{{if .EditedAt}} · {{$.Tf "edited.indicator.with" .EditedAt}}{{end}}</p>
     {{if or (eq $.User.ID .AuthorID) (eq $.Room.Role "mentor")}}
