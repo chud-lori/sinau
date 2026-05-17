@@ -11,7 +11,7 @@ or a heavy LMS.
 Two shapes of relationship, one app:
 
 - **Mentorship rooms** — long-running 1:1 or small-group mentorship.
-  Learners write progress reports and link to their work (Docs, Drive,
+  Mentees write progress reports and link to their work (Docs, Drive,
   Colab, repos). Mentors comment, assign tasks, and award points after
   reviewing what's done.
 - **Classroom rooms** — cohort-style. Teachers post assignments with
@@ -38,7 +38,7 @@ The same person can wear different hats in different rooms:
 | In a Mentorship room      | In a Classroom room        |
 |---------------------------|----------------------------|
 | Mentor                    | Teacher                    |
-| Learner                   | Student                    |
+| Mentee                    | Student                    |
 
 The role you have in a room is set when you're invited — you don't pick it
 yourself. So someone who mentors juniors in one room can be a student in
@@ -55,11 +55,11 @@ elsewhere on the instance.
 
 1. Bootstrap your account on first run.
 2. Create a room. Pick the format (Mentorship or Classroom).
-3. Generate a single-use invite link. Send it to the learner / student.
+3. Generate a single-use invite link. Send it to the mentee / student.
 4. Watch reports / submissions come in. Leave comments, assign work, score.
 5. Optional: flip on a leaderboard if you want the room to see points.
 
-**For a learner / student:**
+**For a mentee / student:**
 
 1. Open the invite link your mentor / teacher sent you.
 2. Pick a password.
@@ -77,7 +77,7 @@ elsewhere on the instance.
   WhatsApp and Telegram wired as preview integrations behind a clean
   notifier interface
 - **Per-user notification settings** at `/settings`
-- **In-app help** at `/help` for both mentors/teachers and learners/students
+- **In-app help** at `/help` for both mentors/teachers and mentees/students
 
 ## What it deliberately is not
 

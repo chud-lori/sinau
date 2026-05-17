@@ -85,14 +85,14 @@ func (s *Store) Migrate() error {
 		`CREATE TABLE IF NOT EXISTS memberships (
 			room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
 			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			role TEXT NOT NULL CHECK(role IN ('mentor','learner')),
+			role TEXT NOT NULL CHECK(role IN ('mentor','mentee')),
 			created_at TEXT NOT NULL,
 			PRIMARY KEY(room_id, user_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS invites (
 			code_hash TEXT PRIMARY KEY,
 			room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-			role TEXT NOT NULL CHECK(role IN ('mentor','learner')),
+			role TEXT NOT NULL CHECK(role IN ('mentor','mentee')),
 			created_by TEXT NOT NULL REFERENCES users(id),
 			expires_at TEXT NOT NULL,
 			used_by TEXT REFERENCES users(id),
@@ -182,7 +182,39 @@ func (s *Store) Migrate() error {
 	if err := s.applyMigration5(); err != nil {
 		return err
 	}
-	return s.applyMigration6()
+	if err := s.applyMigration6(); err != nil {
+		return err
+	}
+	return s.applyMigration7()
+}
+
+func (s *Store) applyMigration7() error {
+	const version = 7
+	var exists int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 1 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	langExists, err := columnExistsTx(tx, "users", "language")
+	if err != nil {
+		return err
+	}
+	if !langExists {
+		if _, err := tx.Exec(`ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'en'`); err != nil {
+			return fmt.Errorf("migration %d: %w", version, err)
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`, version, auth.Now()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ensureGamificationSchema() error {
@@ -491,9 +523,9 @@ func (s *Store) DeleteSession(token string) error {
 func (s *Store) CurrentUser(token string) (*domain.User, error) {
 	var u domain.User
 	var expires string
-	err := s.db.QueryRow(`SELECT u.id, u.name, u.email, s.expires_at
+	err := s.db.QueryRow(`SELECT u.id, u.name, u.email, u.language, s.expires_at
 		FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.id_hash = ?`, auth.HashToken(token)).Scan(&u.ID, &u.Name, &u.Email, &expires)
+		WHERE s.id_hash = ?`, auth.HashToken(token)).Scan(&u.ID, &u.Name, &u.Email, &u.Language, &expires)
 	if err != nil {
 		return nil, err
 	}
@@ -502,6 +534,13 @@ func (s *Store) CurrentUser(token string) (*domain.User, error) {
 		return nil, errors.New("expired session")
 	}
 	return &u, nil
+}
+
+// SetUserLanguage persists the user's preferred UI language. Validation of
+// the language tag is left to the caller (i18n.IsValid).
+func (s *Store) SetUserLanguage(userID, language string) error {
+	_, err := s.db.Exec(`UPDATE users SET language = ? WHERE id = ?`, language, userID)
+	return err
 }
 
 func (s *Store) CSRF(token string) string {
@@ -548,14 +587,14 @@ func (s *Store) MentorDashboard(userID string) (domain.MentorDashboard, error) {
 	if err != nil {
 		return domain.MentorDashboard{}, err
 	}
-	// learnerProgress is the most expensive query in the dashboard
-	// (5 correlated subqueries × N learners). Compute once and share it
+	// menteeProgress is the most expensive query in the dashboard
+	// (5 correlated subqueries × N mentees). Compute once and share it
 	// with mentorSummary, which only needs the "quiet" count from it.
-	learners, err := s.learnerProgress(userID)
+	mentees, err := s.menteeProgress(userID)
 	if err != nil {
 		return domain.MentorDashboard{}, err
 	}
-	summary, err := s.mentorSummary(userID, learners)
+	summary, err := s.mentorSummary(userID, mentees)
 	if err != nil {
 		return domain.MentorDashboard{}, err
 	}
@@ -563,21 +602,21 @@ func (s *Store) MentorDashboard(userID string) (domain.MentorDashboard, error) {
 	if err != nil {
 		return domain.MentorDashboard{}, err
 	}
-	return domain.MentorDashboard{Rooms: rooms, Summary: summary, AttentionItems: attention, Learners: learners}, nil
+	return domain.MentorDashboard{Rooms: rooms, Summary: summary, AttentionItems: attention, Mentees: mentees}, nil
 }
 
-func (s *Store) LearnerDashboard(userID string) (domain.LearnerDashboard, error) {
+func (s *Store) MenteeDashboard(userID string) (domain.MenteeDashboard, error) {
 	rooms, err := s.RoomsFor(userID)
 	if err != nil {
-		return domain.LearnerDashboard{}, err
+		return domain.MenteeDashboard{}, err
 	}
-	tasks, err := s.learnerDashboardTasks(userID)
+	tasks, err := s.menteeDashboardTasks(userID)
 	if err != nil {
-		return domain.LearnerDashboard{}, err
+		return domain.MenteeDashboard{}, err
 	}
-	reports, err := s.learnerRecentReports(userID)
+	reports, err := s.menteeRecentReports(userID)
 	if err != nil {
-		return domain.LearnerDashboard{}, err
+		return domain.MenteeDashboard{}, err
 	}
 	summary := domain.DashboardSummary{Rooms: len(rooms)}
 	for _, t := range tasks {
@@ -600,20 +639,20 @@ func (s *Store) LearnerDashboard(userID string) (domain.LearnerDashboard, error)
 			summary.Blockers++
 		}
 	}
-	return domain.LearnerDashboard{Rooms: rooms, Summary: summary, Tasks: tasks, RecentReports: reports}, nil
+	return domain.MenteeDashboard{Rooms: rooms, Summary: summary, Tasks: tasks, RecentReports: reports}, nil
 }
 
 // mentorSummary computes the dashboard counters. Callers should pass the
-// already-fetched learner progress slice to avoid running the expensive
-// learnerProgress query twice per dashboard render.
-func (s *Store) mentorSummary(userID string, learners []domain.LearnerProgress) (domain.DashboardSummary, error) {
+// already-fetched mentee progress slice to avoid running the expensive
+// menteeProgress query twice per dashboard render.
+func (s *Store) mentorSummary(userID string, mentees []domain.MenteeProgress) (domain.DashboardSummary, error) {
 	var out domain.DashboardSummary
 	queries := []struct {
 		dst *int
 		sql string
 	}{
 		{&out.Rooms, `SELECT COUNT(*) FROM memberships WHERE user_id = ? AND role = 'mentor'`},
-		{&out.ActiveLearners, `SELECT COUNT(DISTINCT ml.user_id) FROM memberships mr JOIN memberships ml ON ml.room_id = mr.room_id AND ml.role = 'learner' WHERE mr.user_id = ? AND mr.role = 'mentor'`},
+		{&out.ActiveMentees, `SELECT COUNT(DISTINCT ml.user_id) FROM memberships mr JOIN memberships ml ON ml.room_id = mr.room_id AND ml.role = 'mentee' WHERE mr.user_id = ? AND mr.role = 'mentor'`},
 		{&out.WaitingFeedback, `SELECT COUNT(*) FROM (
 			SELECT rp.id FROM memberships mr
 			JOIN reports rp ON rp.room_id = mr.room_id
@@ -631,15 +670,15 @@ func (s *Store) mentorSummary(userID string, learners []domain.LearnerProgress) 
 			return out, err
 		}
 	}
-	for _, learner := range learners {
-		if learner.Status == "quiet" {
-			out.InactiveLearners++
+	for _, m := range mentees {
+		if m.Status == "quiet" {
+			out.InactiveMentees++
 		}
 	}
 	return out, nil
 }
 
-func (s *Store) learnerDashboardTasks(userID string) ([]domain.Task, error) {
+func (s *Store) menteeDashboardTasks(userID string) ([]domain.Task, error) {
 	rows, err := s.db.Query(`SELECT t.id, t.title, t.detail, t.status, r.name, t.assigned_to, t.due_date, t.created_at,
 			t.points_awarded, t.reviewed_at, t.reviewed_by
 		FROM tasks t
@@ -664,7 +703,7 @@ func (s *Store) learnerDashboardTasks(userID string) ([]domain.Task, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) learnerRecentReports(userID string) ([]domain.Report, error) {
+func (s *Store) menteeRecentReports(userID string) ([]domain.Report, error) {
 	rows, err := s.db.Query(`SELECT rp.id, rp.room_id, rp.user_id, r.name, rp.learned, rp.practiced, rp.blocker, rp.next_plan, rp.link_url, rp.created_at, COUNT(c.id)
 		FROM reports rp
 		JOIN rooms r ON r.id = rp.room_id
@@ -688,7 +727,7 @@ func (s *Store) learnerRecentReports(userID string) ([]domain.Report, error) {
 	return out, rows.Err()
 }
 
-func learnerStatus(lp domain.LearnerProgress) string {
+func menteeStatus(lp domain.MenteeProgress) string {
 	if lp.OverdueTasks > 0 {
 		return "overdue"
 	}
@@ -746,7 +785,7 @@ func (s *Store) mentorAttention(userID string) ([]domain.AttentionItem, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) learnerProgress(userID string) ([]domain.LearnerProgress, error) {
+func (s *Store) menteeProgress(userID string) ([]domain.MenteeProgress, error) {
 	rows, err := s.db.Query(`SELECT u.id, u.name, u.email, r.id, r.name,
 		COALESCE((SELECT MAX(rp.created_at) FROM reports rp WHERE rp.room_id = r.id AND rp.user_id = u.id), '') AS last_report,
 		(SELECT COUNT(*) FROM reports rp WHERE rp.room_id = r.id AND rp.user_id = u.id AND rp.created_at >= datetime('now', '-7 day')) AS reports_week,
@@ -755,7 +794,7 @@ func (s *Store) learnerProgress(userID string) ([]domain.LearnerProgress, error)
 		(SELECT COUNT(*) FROM reports rp WHERE rp.room_id = r.id AND rp.user_id = u.id AND rp.blocker != '') AS blockers
 		FROM memberships mr
 		JOIN rooms r ON r.id = mr.room_id
-		JOIN memberships ml ON ml.room_id = r.id AND ml.role = 'learner'
+		JOIN memberships ml ON ml.room_id = r.id AND ml.role = 'mentee'
 		JOIN users u ON u.id = ml.user_id
 		WHERE mr.user_id = ? AND mr.role = 'mentor'
 		ORDER BY overdue_tasks DESC, blockers DESC, last_report ASC`, userID)
@@ -763,13 +802,13 @@ func (s *Store) learnerProgress(userID string) ([]domain.LearnerProgress, error)
 		return nil, err
 	}
 	defer rows.Close()
-	var out []domain.LearnerProgress
+	var out []domain.MenteeProgress
 	for rows.Next() {
-		var lp domain.LearnerProgress
+		var lp domain.MenteeProgress
 		if err := rows.Scan(&lp.UserID, &lp.Name, &lp.Email, &lp.RoomID, &lp.RoomName, &lp.LastReport, &lp.ReportsThisWeek, &lp.OpenTasks, &lp.OverdueTasks, &lp.Blockers); err != nil {
 			return nil, err
 		}
-		lp.Status = learnerStatus(lp)
+		lp.Status = menteeStatus(lp)
 		out = append(out, lp)
 	}
 	return out, rows.Err()
@@ -810,7 +849,7 @@ func (s *Store) RoomAccess(roomID, userID string) (domain.Room, string, bool) {
 	return rm, role, err == nil
 }
 
-// SetRoomLeaderboardVisible toggles whether learners can see the full
+// SetRoomLeaderboardVisible toggles whether mentees can see the full
 // per-room leaderboard. Mentor-only at the handler layer.
 func (s *Store) SetRoomLeaderboardVisible(roomID string, visible bool) error {
 	v := 0
@@ -821,23 +860,23 @@ func (s *Store) SetRoomLeaderboardVisible(roomID string, visible bool) error {
 	return err
 }
 
-// IsLearner reports whether userID is enrolled in roomID specifically as a
-// learner. Tasks are only assignable to learners, so mentor-only checks like
+// IsMentee reports whether userID is enrolled in roomID specifically as a
+// mentee. Tasks are only assignable to mentees, so mentor-only checks like
 // "is this person in the room" are insufficient.
-func (s *Store) IsLearner(roomID, userID string) bool {
+func (s *Store) IsMentee(roomID, userID string) bool {
 	var n int
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM memberships WHERE room_id = ? AND user_id = ? AND role = ?`,
-		roomID, userID, domain.RoleLearner).Scan(&n)
+		roomID, userID, domain.RoleMentee).Scan(&n)
 	return n == 1
 }
 
-// LearnerIDs returns every learner user_id in the room, ordered by name for
-// stable display. Used by the "assign task to all learners" flow.
-func (s *Store) LearnerIDs(roomID string) ([]string, error) {
+// MenteeIDs returns every mentee user_id in the room, ordered by name for
+// stable display. Used by the "assign task to all mentees" flow.
+func (s *Store) MenteeIDs(roomID string) ([]string, error) {
 	rows, err := s.db.Query(`SELECT m.user_id FROM memberships m
 		JOIN users u ON u.id = m.user_id
 		WHERE m.room_id = ? AND m.role = ?
-		ORDER BY u.name`, roomID, domain.RoleLearner)
+		ORDER BY u.name`, roomID, domain.RoleMentee)
 	if err != nil {
 		return nil, err
 	}
@@ -954,8 +993,8 @@ func (s *Store) RoomData(roomID, userID, role string) (domain.RoomData, error) {
 		}
 	}
 	for _, m := range members {
-		if m.Role == domain.RoleLearner && m.LastReport == "" {
-			st.InactiveLearners++
+		if m.Role == domain.RoleMentee && m.LastReport == "" {
+			st.InactiveMentees++
 		}
 	}
 	for _, t := range tasks {
@@ -992,7 +1031,7 @@ func (s *Store) RoomData(roomID, userID, role string) (domain.RoomData, error) {
 		PendingReviews: pending,
 	}
 	// Fetch the leaderboard only when it'll actually be rendered: mentors
-	// always see it, learners only when the mentor has flipped the
+	// always see it, mentees only when the mentor has flipped the
 	// visibility toggle. We still need the viewer's own rank/points, so
 	// compute those from the same board (avoiding a second pass that the
 	// old UserRankInRoom call would have required).
@@ -1015,9 +1054,9 @@ func (s *Store) RoomData(roomID, userID, role string) (domain.RoomData, error) {
 			}
 		}
 	} else {
-		// Learner who can't see the full board still gets their own
+		// Mentee who can't see the full board still gets their own
 		// score; cheap single-row query.
-		rank, myPoints, err = s.learnerScore(roomID, userID)
+		rank, myPoints, err = s.menteeScore(roomID, userID)
 		if err != nil {
 			return domain.RoomData{}, err
 		}
@@ -1035,13 +1074,13 @@ func (s *Store) RoomData(roomID, userID, role string) (domain.RoomData, error) {
 	}, nil
 }
 
-// learnerScore returns the viewer's own points + dense rank in the room
+// menteeScore returns the viewer's own points + dense rank in the room
 // without fetching the full leaderboard. Used when the room's leaderboard
-// is hidden so a learner can still see their own progress.
-func (s *Store) learnerScore(roomID, userID string) (domain.Rank, int, error) {
-	var totalLearners int
+// is hidden so a mentee can still see their own progress.
+func (s *Store) menteeScore(roomID, userID string) (domain.Rank, int, error) {
+	var totalMentees int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM memberships WHERE room_id = ? AND role = ?`,
-		roomID, domain.RoleLearner).Scan(&totalLearners); err != nil {
+		roomID, domain.RoleMentee).Scan(&totalMentees); err != nil {
 		return domain.Rank{}, 0, err
 	}
 	var myPoints int
@@ -1055,7 +1094,7 @@ func (s *Store) learnerScore(roomID, userID string) (domain.Rank, int, error) {
 	)`, roomID, myPoints).Scan(&higher); err != nil {
 		return domain.Rank{}, 0, err
 	}
-	return domain.Rank{Position: higher + 1, Total: totalLearners}, myPoints, nil
+	return domain.Rank{Position: higher + 1, Total: totalMentees}, myPoints, nil
 }
 
 func (s *Store) Members(roomID string) ([]domain.Member, error) {
@@ -1202,16 +1241,16 @@ func (s *Store) CreateTask(roomID, assignedTo, assignedBy, title, detail, dueDat
 	return err
 }
 
-// CreateTaskForLearners inserts one task per current learner in the room
-// inside a single transaction, so either every learner gets the task or none
+// CreateTaskForMentees inserts one task per current mentee in the room
+// inside a single transaction, so either every mentee gets the task or none
 // do. Returns the number of tasks created (zero if the room has no
-// learners).
-func (s *Store) CreateTaskForLearners(roomID, assignedBy, title, detail, dueDate string) (int, error) {
-	learnerIDs, err := s.LearnerIDs(roomID)
+// mentees).
+func (s *Store) CreateTaskForMentees(roomID, assignedBy, title, detail, dueDate string) (int, error) {
+	menteeIDs, err := s.MenteeIDs(roomID)
 	if err != nil {
 		return 0, err
 	}
-	if len(learnerIDs) == 0 {
+	if len(menteeIDs) == 0 {
 		return 0, nil
 	}
 	tx, err := s.db.Begin()
@@ -1226,19 +1265,19 @@ func (s *Store) CreateTaskForLearners(roomID, assignedBy, title, detail, dueDate
 	}
 	defer stmt.Close()
 	now := auth.Now()
-	for _, learnerID := range learnerIDs {
+	for _, menteeID := range menteeIDs {
 		id, err := auth.NewID()
 		if err != nil {
 			return 0, err
 		}
-		if _, err := stmt.Exec(id, roomID, learnerID, assignedBy, title, detail, "todo", dueDate, now, now); err != nil {
+		if _, err := stmt.Exec(id, roomID, menteeID, assignedBy, title, detail, "todo", dueDate, now, now); err != nil {
 			return 0, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	return len(learnerIDs), nil
+	return len(menteeIDs), nil
 }
 
 func (s *Store) UpdateTaskStatus(roomID, taskID, userID, role, status string) (bool, error) {
@@ -1256,13 +1295,13 @@ func (s *Store) UpdateTaskStatus(roomID, taskID, userID, role, status string) (b
 
 func (s *Store) Assignments(roomID, userID, role string) ([]domain.Assignment, error) {
 	if role == domain.RoleMentor {
-		// total_learners is the same value for every row in this result
+		// total_mentees is the same value for every row in this result
 		// set, so resolve it once instead of running a correlated
 		// subquery per assignment. Submissions count uses a grouped
 		// LEFT JOIN for the same reason.
-		var totalLearners int
+		var totalMentees int
 		if err := s.db.QueryRow(`SELECT COUNT(*) FROM memberships WHERE room_id = ? AND role = ?`,
-			roomID, domain.RoleLearner).Scan(&totalLearners); err != nil {
+			roomID, domain.RoleMentee).Scan(&totalMentees); err != nil {
 			return nil, err
 		}
 		rows, err := s.db.Query(`SELECT a.id, a.room_id, a.title, a.instructions, a.resource_url, a.due_date, a.created_at,
@@ -1285,7 +1324,7 @@ func (s *Store) Assignments(roomID, userID, role string) ([]domain.Assignment, e
 			if err := rows.Scan(&a.ID, &a.RoomID, &a.Title, &a.Instructions, &a.ResourceURL, &a.DueDate, &a.CreatedAt, &a.Submitted); err != nil {
 				return nil, err
 			}
-			a.TotalLearners = totalLearners
+			a.TotalMentees = totalMentees
 			out = append(out, a)
 		}
 		return out, rows.Err()
@@ -1351,8 +1390,8 @@ func (s *Store) CreateAssignment(roomID, createdBy, title, instructions, resourc
 }
 
 func (s *Store) SubmitAssignment(roomID, assignmentID, studentID, linkURL, note string) error {
-	if !s.IsLearner(roomID, studentID) {
-		return errors.New("student is not a learner in this room")
+	if !s.IsMentee(roomID, studentID) {
+		return errors.New("student is not a mentee in this room")
 	}
 	id, err := auth.NewID()
 	if err != nil {
@@ -1422,7 +1461,7 @@ func (s *Store) Invites(roomID string) ([]domain.Invite, error) {
 func (s *Store) DueTaskReminders(now time.Time, window time.Duration) ([]domain.TaskReminder, error) {
 	start := now.UTC().Format("2006-01-02")
 	end := now.UTC().Add(window).Format("2006-01-02")
-	rows, err := s.db.Query(`SELECT t.id, t.title, t.detail, t.due_date, r.id, r.name, u.id, u.name, u.email
+	rows, err := s.db.Query(`SELECT t.id, t.title, t.detail, t.due_date, r.id, r.name, u.id, u.name, u.email, u.language
 		FROM tasks t
 		JOIN rooms r ON r.id = t.room_id
 		JOIN users u ON u.id = t.assigned_to
@@ -1438,7 +1477,7 @@ func (s *Store) DueTaskReminders(now time.Time, window time.Duration) ([]domain.
 	var out []domain.TaskReminder
 	for rows.Next() {
 		var rem domain.TaskReminder
-		if err := rows.Scan(&rem.TaskID, &rem.Title, &rem.Detail, &rem.DueDate, &rem.RoomID, &rem.RoomName, &rem.AssigneeID, &rem.AssigneeName, &rem.AssigneeEmail); err != nil {
+		if err := rows.Scan(&rem.TaskID, &rem.Title, &rem.Detail, &rem.DueDate, &rem.RoomID, &rem.RoomName, &rem.AssigneeID, &rem.AssigneeName, &rem.AssigneeEmail, &rem.AssigneeLanguage); err != nil {
 			return nil, err
 		}
 		out = append(out, rem)
@@ -1545,8 +1584,8 @@ func (s *Store) UserPointsTotal(userID string) int {
 	return n
 }
 
-// RoomLeaderboard returns every learner in the room ranked by points (desc).
-// Learners with zero points still appear so newcomers see themselves.
+// RoomLeaderboard returns every mentee in the room ranked by points (desc).
+// Mentees with zero points still appear so newcomers see themselves.
 //
 // The points sum is pulled in via one grouped LEFT JOIN instead of a
 // per-row correlated subquery: O(N+M) rather than O(N×M) at the storage
@@ -1562,7 +1601,7 @@ func (s *Store) RoomLeaderboard(roomID string) ([]domain.LeaderboardEntry, error
 			GROUP BY user_id
 		) p ON p.user_id = u.id
 		WHERE m.room_id = ? AND m.role = ?
-		ORDER BY points DESC, u.name ASC`, roomID, roomID, domain.RoleLearner)
+		ORDER BY points DESC, u.name ASC`, roomID, roomID, domain.RoleMentee)
 	if err != nil {
 		return nil, err
 	}
@@ -1586,9 +1625,9 @@ func (s *Store) RoomLeaderboard(roomID string) ([]domain.LeaderboardEntry, error
 	return out, rows.Err()
 }
 
-// UserRankInRoom returns the learner's 1-indexed position on the room
-// leaderboard along with the total number of learners. Position 0 means the
-// user has no recorded membership as a learner in the room.
+// UserRankInRoom returns the mentee's 1-indexed position on the room
+// leaderboard along with the total number of mentees. Position 0 means the
+// user has no recorded membership as a mentee in the room.
 func (s *Store) UserRankInRoom(userID, roomID string) (domain.Rank, error) {
 	board, err := s.RoomLeaderboard(roomID)
 	if err != nil {

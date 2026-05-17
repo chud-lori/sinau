@@ -57,7 +57,7 @@ func TestMigrateHandlesPreRebaseClassroomMigration3(t *testing.T) {
 		`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`,
 		`INSERT INTO schema_migrations(version, applied_at) VALUES(1, '2026-01-01T00:00:00Z'), (2, '2026-01-01T00:00:00Z'), (3, '2026-01-01T00:00:00Z')`,
 		`CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL, created_at TEXT NOT NULL)`,
-		`CREATE TABLE memberships (room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('mentor','learner')), created_at TEXT NOT NULL, PRIMARY KEY(room_id, user_id))`,
+		`CREATE TABLE memberships (room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('mentor','mentee')), created_at TEXT NOT NULL, PRIMARY KEY(room_id, user_id))`,
 		`CREATE TABLE rooms (id TEXT PRIMARY KEY, name TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'mentorship', created_by TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL)`,
 		`CREATE TABLE tasks (id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE, assigned_to TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, assigned_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, title TEXT NOT NULL, detail TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('todo','doing','done')), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, due_date TEXT NOT NULL DEFAULT '', last_reminded_at TEXT NOT NULL DEFAULT '')`,
 		`CREATE TABLE assignments (id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE, created_by TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL, instructions TEXT NOT NULL, resource_url TEXT NOT NULL, due_date TEXT NOT NULL, created_at TEXT NOT NULL)`,
@@ -111,7 +111,7 @@ func createInvite(t *testing.T, st *Store, roomID, mentorID, role string) string
 	return code
 }
 
-func joinLearner(t *testing.T, st *Store, code, name, email string) (string, string) {
+func joinMentee(t *testing.T, st *Store, code, name, email string) (string, string) {
 	t.Helper()
 	hash, err := auth.HashPassword("verysecurepass123")
 	if err != nil {
@@ -182,7 +182,7 @@ func TestRoomMentorInviteDoesNotGrantCreateRoomsCapability(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
 	code := createInvite(t, st, roomID, mentorID, domain.RoleMentor)
-	coMentorID, _ := joinLearner(t, st, code, "Co Mentor", "co@example.com")
+	coMentorID, _ := joinMentee(t, st, code, "Co Mentor", "co@example.com")
 
 	if !st.IsMentor(coMentorID) {
 		t.Fatal("mentor invite should grant mentor role inside the room")
@@ -198,11 +198,11 @@ func TestRoomMentorInviteDoesNotGrantCreateRoomsCapability(t *testing.T) {
 func TestInviteCanOnlyBeUsedOnce(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
-	code := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
+	code := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
 
-	learnerID, joinedRoomID := joinLearner(t, st, code, "Learner", "learner@example.com")
-	if learnerID == "" || joinedRoomID != roomID {
-		t.Fatal("learner did not join expected room")
+	menteeID, joinedRoomID := joinMentee(t, st, code, "Mentee", "mentee@example.com")
+	if menteeID == "" || joinedRoomID != roomID {
+		t.Fatal("mentee did not join expected room")
 	}
 
 	hash, err := auth.HashPassword("verysecurepass123")
@@ -214,18 +214,18 @@ func TestInviteCanOnlyBeUsedOnce(t *testing.T) {
 	}
 }
 
-func TestLearnerOnlySeesOwnReports(t *testing.T) {
+func TestMenteeOnlySeesOwnReports(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
-	codeA := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
-	codeB := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
-	learnerA, _ := joinLearner(t, st, codeA, "Learner A", "a@example.com")
-	learnerB, _ := joinLearner(t, st, codeB, "Learner B", "b@example.com")
+	codeA := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	codeB := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	menteeA, _ := joinMentee(t, st, codeA, "Mentee A", "a@example.com")
+	menteeB, _ := joinMentee(t, st, codeB, "Mentee B", "b@example.com")
 
-	if err := st.CreateReport(roomID, learnerA, "A learned", "A practiced", "", "A next", ""); err != nil {
+	if err := st.CreateReport(roomID, menteeA, "A learned", "A practiced", "", "A next", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CreateReport(roomID, learnerB, "B learned", "B practiced", "", "B next", ""); err != nil {
+	if err := st.CreateReport(roomID, menteeB, "B learned", "B practiced", "", "B next", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -236,12 +236,12 @@ func TestLearnerOnlySeesOwnReports(t *testing.T) {
 	if len(mentorReports) != 2 {
 		t.Fatalf("mentor expected 2 reports, got %d", len(mentorReports))
 	}
-	learnerReports, err := st.Reports(roomID, learnerA, domain.RoleLearner)
+	menteeReports, err := st.Reports(roomID, menteeA, domain.RoleMentee)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(learnerReports) != 1 || learnerReports[0].UserID != learnerA {
-		t.Fatalf("learner report visibility broken: %+v", learnerReports)
+	if len(menteeReports) != 1 || menteeReports[0].UserID != menteeA {
+		t.Fatalf("mentee report visibility broken: %+v", menteeReports)
 	}
 }
 
@@ -278,20 +278,20 @@ func TestClassroomAssignmentsCanBeSubmittedAndReviewed(t *testing.T) {
 	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
 		t.Fatalf("classroom room access broken: room=%+v role=%q ok=%v", rm, role, ok)
 	}
-	code := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
-	learnerID, _ := joinLearner(t, st, code, "Student", "student@example.com")
+	code := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	menteeID, _ := joinMentee(t, st, code, "Student", "student@example.com")
 
 	if err := st.CreateAssignment(roomID, mentorID, "Build notebook", "Train a small model", "https://docs.google.com/doc", "2026-06-01"); err != nil {
 		t.Fatal(err)
 	}
-	studentAssignments, err := st.Assignments(roomID, learnerID, domain.RoleLearner)
+	studentAssignments, err := st.Assignments(roomID, menteeID, domain.RoleMentee)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(studentAssignments) != 1 || studentAssignments[0].MySubmissionStatus != "" {
 		t.Fatalf("expected one unsubmitted assignment, got %+v", studentAssignments)
 	}
-	if err := st.SubmitAssignment(roomID, studentAssignments[0].ID, learnerID, "https://colab.research.google.com/notebook", "Finished baseline"); err != nil {
+	if err := st.SubmitAssignment(roomID, studentAssignments[0].ID, menteeID, "https://colab.research.google.com/notebook", "Finished baseline"); err != nil {
 		t.Fatal(err)
 	}
 	submissions, err := st.Submissions(roomID)
@@ -308,24 +308,24 @@ func TestClassroomAssignmentsCanBeSubmittedAndReviewed(t *testing.T) {
 	if !updated {
 		t.Fatal("review did not update submission")
 	}
-	studentAssignments, err = st.Assignments(roomID, learnerID, domain.RoleLearner)
+	studentAssignments, err = st.Assignments(roomID, menteeID, domain.RoleMentee)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if studentAssignments[0].MySubmissionStatus != "reviewed" || studentAssignments[0].MyScore != "90" {
-		t.Fatalf("learner did not see review result: %+v", studentAssignments[0])
+		t.Fatalf("mentee did not see review result: %+v", studentAssignments[0])
 	}
 }
 
-func TestCreateTaskForLearnersAssignsEveryLearnerOnce(t *testing.T) {
+func TestCreateTaskForMenteesAssignsEveryMenteeOnce(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
-	codeA := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
-	codeB := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
-	learnerA, _ := joinLearner(t, st, codeA, "Learner A", "a@example.com")
-	learnerB, _ := joinLearner(t, st, codeB, "Learner B", "b@example.com")
+	codeA := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	codeB := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	menteeA, _ := joinMentee(t, st, codeA, "Mentee A", "a@example.com")
+	menteeB, _ := joinMentee(t, st, codeB, "Mentee B", "b@example.com")
 
-	count, err := st.CreateTaskForLearners(roomID, mentorID, "Read RFC", "details", "")
+	count, err := st.CreateTaskForMentees(roomID, mentorID, "Read RFC", "details", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,22 +333,22 @@ func TestCreateTaskForLearnersAssignsEveryLearnerOnce(t *testing.T) {
 		t.Fatalf("expected 2 tasks created, got %d", count)
 	}
 
-	tasksA, err := st.Tasks(roomID, learnerA, domain.RoleLearner)
+	tasksA, err := st.Tasks(roomID, menteeA, domain.RoleMentee)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasksB, err := st.Tasks(roomID, learnerB, domain.RoleLearner)
+	tasksB, err := st.Tasks(roomID, menteeB, domain.RoleMentee)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(tasksA) != 1 || len(tasksB) != 1 {
-		t.Fatalf("expected exactly one task per learner, got A=%d B=%d", len(tasksA), len(tasksB))
+		t.Fatalf("expected exactly one task per mentee, got A=%d B=%d", len(tasksA), len(tasksB))
 	}
 	if tasksA[0].ID == tasksB[0].ID {
-		t.Fatal("bulk assign produced shared task ID across learners")
+		t.Fatal("bulk assign produced shared task ID across mentees")
 	}
 
-	// Mentor is not a learner: bulk should never assign to mentor.
+	// Mentor is not a mentee: bulk should never assign to mentor.
 	mentorTasks, err := st.Tasks(roomID, mentorID, domain.RoleMentor)
 	if err != nil {
 		t.Fatal(err)
@@ -360,10 +360,10 @@ func TestCreateTaskForLearnersAssignsEveryLearnerOnce(t *testing.T) {
 	}
 }
 
-func TestCreateTaskForLearnersIsZeroWhenNoLearners(t *testing.T) {
+func TestCreateTaskForMenteesIsZeroWhenNoMentees(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
-	count, err := st.CreateTaskForLearners(roomID, mentorID, "Read RFC", "", "")
+	count, err := st.CreateTaskForMentees(roomID, mentorID, "Read RFC", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,34 +372,34 @@ func TestCreateTaskForLearnersIsZeroWhenNoLearners(t *testing.T) {
 	}
 }
 
-func TestIsLearnerRejectsMentorsAndOutsiders(t *testing.T) {
+func TestIsMenteeRejectsMentorsAndOutsiders(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
-	if st.IsLearner(roomID, mentorID) {
-		t.Fatal("mentor incorrectly classified as learner")
+	if st.IsMentee(roomID, mentorID) {
+		t.Fatal("mentor incorrectly classified as mentee")
 	}
-	if st.IsLearner(roomID, "non-existent-user") {
-		t.Fatal("non-member classified as learner")
+	if st.IsMentee(roomID, "non-existent-user") {
+		t.Fatal("non-member classified as mentee")
 	}
-	code := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
-	learnerID, _ := joinLearner(t, st, code, "Learner", "learner@example.com")
-	if !st.IsLearner(roomID, learnerID) {
-		t.Fatal("learner not recognised by IsLearner")
+	code := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	menteeID, _ := joinMentee(t, st, code, "Mentee", "mentee@example.com")
+	if !st.IsMentee(roomID, menteeID) {
+		t.Fatal("mentee not recognised by IsMentee")
 	}
 }
 
 func TestTaskUpdateAuthorization(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
-	codeA := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
-	codeB := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
-	learnerA, _ := joinLearner(t, st, codeA, "Learner A", "a@example.com")
-	learnerB, _ := joinLearner(t, st, codeB, "Learner B", "b@example.com")
+	codeA := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	codeB := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	menteeA, _ := joinMentee(t, st, codeA, "Mentee A", "a@example.com")
+	menteeB, _ := joinMentee(t, st, codeB, "Mentee B", "b@example.com")
 
-	if err := st.CreateTask(roomID, learnerA, mentorID, "Read", "Read docs", ""); err != nil {
+	if err := st.CreateTask(roomID, menteeA, mentorID, "Read", "Read docs", ""); err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := st.Tasks(roomID, learnerA, domain.RoleLearner)
+	tasks, err := st.Tasks(roomID, menteeA, domain.RoleMentee)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,12 +407,12 @@ func TestTaskUpdateAuthorization(t *testing.T) {
 		t.Fatalf("expected one task, got %d", len(tasks))
 	}
 
-	updated, err := st.UpdateTaskStatus(roomID, tasks[0].ID, learnerB, domain.RoleLearner, "done")
+	updated, err := st.UpdateTaskStatus(roomID, tasks[0].ID, menteeB, domain.RoleMentee, "done")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if updated {
-		t.Fatal("learner updated another learner's task")
+		t.Fatal("mentee updated another mentee's task")
 	}
 	updated, err = st.UpdateTaskStatus(roomID, tasks[0].ID, mentorID, domain.RoleMentor, "done")
 	if err != nil {
@@ -426,15 +426,15 @@ func TestTaskUpdateAuthorization(t *testing.T) {
 func TestMemberOpenTaskCountDoesNotMultiplyByReports(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
-	code := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
-	learnerID, _ := joinLearner(t, st, code, "Learner", "learner@example.com")
+	code := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	menteeID, _ := joinMentee(t, st, code, "Mentee", "mentee@example.com")
 
 	for i := 0; i < 3; i++ {
-		if err := st.CreateReport(roomID, learnerID, "learned", "practiced", "", "next", ""); err != nil {
+		if err := st.CreateReport(roomID, menteeID, "learned", "practiced", "", "next", ""); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := st.CreateTask(roomID, learnerID, mentorID, "One task", "detail", ""); err != nil {
+	if err := st.CreateTask(roomID, menteeID, mentorID, "One task", "detail", ""); err != nil {
 		t.Fatal(err)
 	}
 	members, err := st.Members(roomID)
@@ -442,7 +442,7 @@ func TestMemberOpenTaskCountDoesNotMultiplyByReports(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, m := range members {
-		if m.UserID == learnerID && m.OpenTasks != 1 {
+		if m.UserID == menteeID && m.OpenTasks != 1 {
 			t.Fatalf("expected one open task, got %d", m.OpenTasks)
 		}
 	}
@@ -451,15 +451,15 @@ func TestMemberOpenTaskCountDoesNotMultiplyByReports(t *testing.T) {
 func TestTaskDueDateAndReminders(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
-	code := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
-	learnerID, _ := joinLearner(t, st, code, "Learner", "learner@example.com")
+	code := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	menteeID, _ := joinMentee(t, st, code, "Mentee", "mentee@example.com")
 
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	dueSoon := now.Add(24 * time.Hour).Format("2006-01-02")
-	if err := st.CreateTask(roomID, learnerID, mentorID, "Due soon", "detail", dueSoon); err != nil {
+	if err := st.CreateTask(roomID, menteeID, mentorID, "Due soon", "detail", dueSoon); err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := st.Tasks(roomID, learnerID, domain.RoleLearner)
+	tasks, err := st.Tasks(roomID, menteeID, domain.RoleMentee)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,13 +489,13 @@ func TestTaskDueDateAndReminders(t *testing.T) {
 func TestReviewTaskAwardsPointsOnce(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
-	code := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
-	learnerID, _ := joinLearner(t, st, code, "Learner", "learner@example.com")
+	code := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	menteeID, _ := joinMentee(t, st, code, "Mentee", "mentee@example.com")
 
-	if err := st.CreateTask(roomID, learnerID, mentorID, "Read RFC", "details", ""); err != nil {
+	if err := st.CreateTask(roomID, menteeID, mentorID, "Read RFC", "details", ""); err != nil {
 		t.Fatal(err)
 	}
-	tasks, _ := st.Tasks(roomID, learnerID, domain.RoleLearner)
+	tasks, _ := st.Tasks(roomID, menteeID, domain.RoleMentee)
 	if len(tasks) != 1 {
 		t.Fatalf("want 1 task, got %d", len(tasks))
 	}
@@ -507,14 +507,14 @@ func TestReviewTaskAwardsPointsOnce(t *testing.T) {
 	}
 
 	// Mark done, then review.
-	if _, err := st.UpdateTaskStatus(roomID, taskID, learnerID, domain.RoleLearner, "done"); err != nil {
+	if _, err := st.UpdateTaskStatus(roomID, taskID, menteeID, domain.RoleMentee, "done"); err != nil {
 		t.Fatal(err)
 	}
 	ok, err := st.ReviewTask(roomID, taskID, mentorID, 4)
 	if err != nil || !ok {
 		t.Fatalf("first review should succeed (ok=%v err=%v)", ok, err)
 	}
-	if got := st.UserPointsTotal(learnerID); got != 4 {
+	if got := st.UserPointsTotal(menteeID); got != 4 {
 		t.Fatalf("total points want 4, got %d", got)
 	}
 
@@ -523,7 +523,7 @@ func TestReviewTaskAwardsPointsOnce(t *testing.T) {
 	if err != nil || ok {
 		t.Fatalf("re-review should not award (ok=%v err=%v)", ok, err)
 	}
-	if got := st.UserPointsTotal(learnerID); got != 4 {
+	if got := st.UserPointsTotal(menteeID); got != 4 {
 		t.Fatalf("total points unchanged after re-review, got %d", got)
 	}
 
@@ -540,19 +540,19 @@ func TestReviewTaskAwardsPointsOnce(t *testing.T) {
 func TestRoomLeaderboardOrderAndRank(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
-	codeA := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
-	codeB := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
-	codeC := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
-	learnerA, _ := joinLearner(t, st, codeA, "A", "a@example.com")
-	learnerB, _ := joinLearner(t, st, codeB, "B", "b@example.com")
-	learnerC, _ := joinLearner(t, st, codeC, "C", "c@example.com")
+	codeA := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	codeB := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	codeC := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	menteeA, _ := joinMentee(t, st, codeA, "A", "a@example.com")
+	menteeB, _ := joinMentee(t, st, codeB, "B", "b@example.com")
+	menteeC, _ := joinMentee(t, st, codeC, "C", "c@example.com")
 
-	for who, pts := range map[string]int{learnerA: 5, learnerB: 3, learnerC: 5} {
+	for who, pts := range map[string]int{menteeA: 5, menteeB: 3, menteeC: 5} {
 		if err := st.CreateTask(roomID, who, mentorID, "t", "", ""); err != nil {
 			t.Fatal(err)
 		}
-		tasks, _ := st.Tasks(roomID, who, domain.RoleLearner)
-		if _, err := st.UpdateTaskStatus(roomID, tasks[0].ID, who, domain.RoleLearner, "done"); err != nil {
+		tasks, _ := st.Tasks(roomID, who, domain.RoleMentee)
+		if _, err := st.UpdateTaskStatus(roomID, tasks[0].ID, who, domain.RoleMentee, "done"); err != nil {
 			t.Fatal(err)
 		}
 		if ok, err := st.ReviewTask(roomID, tasks[0].ID, mentorID, pts); err != nil || !ok {
@@ -569,12 +569,12 @@ func TestRoomLeaderboardOrderAndRank(t *testing.T) {
 	if board[0].Rank != 1 || board[1].Rank != 1 || board[2].Rank != 2 {
 		t.Fatalf("dense ranking wrong: %+v", board)
 	}
-	rank, err := st.UserRankInRoom(learnerB, roomID)
+	rank, err := st.UserRankInRoom(menteeB, roomID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rank.Position != 2 || rank.Total != 3 {
-		t.Fatalf("learner B rank want 2/3, got %+v", rank)
+		t.Fatalf("mentee B rank want 2/3, got %+v", rank)
 	}
 }
 
@@ -632,14 +632,14 @@ func TestValidNotifChannel(t *testing.T) {
 func TestRoleDashboards(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
-	code := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
-	learnerID, _ := joinLearner(t, st, code, "Learner", "learner@example.com")
+	code := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	menteeID, _ := joinMentee(t, st, code, "Mentee", "mentee@example.com")
 
-	if err := st.CreateReport(roomID, learnerID, "learned", "practiced", "blocked", "next", ""); err != nil {
+	if err := st.CreateReport(roomID, menteeID, "learned", "practiced", "blocked", "next", ""); err != nil {
 		t.Fatal(err)
 	}
 	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
-	if err := st.CreateTask(roomID, learnerID, mentorID, "Overdue task", "detail", yesterday); err != nil {
+	if err := st.CreateTask(roomID, menteeID, mentorID, "Overdue task", "detail", yesterday); err != nil {
 		t.Fatal(err)
 	}
 
@@ -647,21 +647,21 @@ func TestRoleDashboards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mentorDash.Summary.ActiveLearners != 1 || mentorDash.Summary.Blockers != 1 || mentorDash.Summary.OverdueTasks != 1 {
+	if mentorDash.Summary.ActiveMentees != 1 || mentorDash.Summary.Blockers != 1 || mentorDash.Summary.OverdueTasks != 1 {
 		t.Fatalf("bad mentor summary: %+v", mentorDash.Summary)
 	}
 	if len(mentorDash.AttentionItems) == 0 {
 		t.Fatal("expected attention items")
 	}
-	if len(mentorDash.Learners) != 1 || mentorDash.Learners[0].Status != "overdue" {
-		t.Fatalf("bad learner progress: %+v", mentorDash.Learners)
+	if len(mentorDash.Mentees) != 1 || mentorDash.Mentees[0].Status != "overdue" {
+		t.Fatalf("bad mentee progress: %+v", mentorDash.Mentees)
 	}
 
-	learnerDash, err := st.LearnerDashboard(learnerID)
+	menteeDash, err := st.MenteeDashboard(menteeID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if learnerDash.Summary.OpenTasks != 1 || learnerDash.Summary.OverdueTasks != 1 || learnerDash.Summary.Blockers != 1 {
-		t.Fatalf("bad learner summary: %+v", learnerDash.Summary)
+	if menteeDash.Summary.OpenTasks != 1 || menteeDash.Summary.OverdueTasks != 1 || menteeDash.Summary.Blockers != 1 {
+		t.Fatalf("bad mentee summary: %+v", menteeDash.Summary)
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"sinau/internal/auth"
 	"sinau/internal/domain"
+	"sinau/internal/i18n"
 	"sinau/internal/store"
 )
 
@@ -35,10 +36,19 @@ type Config struct {
 
 type ctxKey string
 
-const userKey ctxKey = "user"
+const (
+	userKey ctxKey = "user"
+	langKey ctxKey = "lang"
+
+	langCookie = "sinau_lang"
+)
 
 type PageData struct {
 	Title                string
+	TitleKey             string
+	Lang                 i18n.Lang
+	SupportedLangs       []i18n.Lang
+	RequestPath          string
 	User                 *domain.User
 	CSRF                 string
 	Error                string
@@ -61,14 +71,35 @@ type PageData struct {
 	InviteCode           string
 	JoinCode             string
 	Stats                domain.Stats
-	RoomLearners         []domain.Member
+	RoomMentees          []domain.Member
 	Leaderboard          []domain.LeaderboardEntry
 	MyPoints             int
 	MyRank               domain.Rank
 	MentorDash           domain.MentorDashboard
-	LearnerDash          domain.LearnerDashboard
+	MenteeDash           domain.MenteeDashboard
 	Prefs                domain.NotificationPrefs
 }
+
+// T returns the localised string for key in the page's active language.
+// Templates call this as {{.T "key"}}, or {{$.T "key"}} inside ranges.
+func (p PageData) T(key string) string { return i18n.T(p.Lang, key) }
+
+// Tf is T with fmt.Sprintf-style substitution. Used for strings with
+// placeholders like "%d pts" or "Due %s".
+func (p PageData) Tf(key string, args ...any) string { return i18n.Tf(p.Lang, key, args...) }
+
+// RoleLabel translates a (mode, role) pair. Centralised here so templates
+// never branch on raw "mentor"/"mentee" strings to pick a localised label.
+func (p PageData) RoleLabel(mode, role string) string {
+	return i18n.RoleLabel(p.Lang, mode, role)
+}
+
+// ModeLabel translates the room mode for the page's language.
+func (p PageData) ModeLabel(mode string) string { return i18n.ModeLabel(p.Lang, mode) }
+
+// LangLabel returns the native-language display name for a language code,
+// used by the picker so each option shows in its own language.
+func (p PageData) LangLabel(l i18n.Lang) string { return i18n.Label(l) }
 
 func New(cfg Config) (*Server, error) {
 	tpl, err := template.ParseGlob(cfg.Templates + "/*.html")
@@ -129,7 +160,46 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /guide", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/help", http.StatusMovedPermanently)
 	})
+	mux.HandleFunc("POST /lang", s.withUser(s.setLanguage))
 	return securityHeaders(mux)
+}
+
+// setLanguage handles the topbar picker. Persists the choice to a cookie
+// for anonymous visitors and, when the user is logged in, also to the
+// users.language row so it follows them across browsers and gets used by
+// notifications. CSRF is enforced only for logged-in users — anonymous
+// visitors don't have a session-bound token yet.
+func (s *Server) setLanguage(w http.ResponseWriter, r *http.Request) {
+	lang := i18n.Lang(strings.ToLower(strings.TrimSpace(r.FormValue("lang"))))
+	if !i18n.IsValid(lang) {
+		http.Error(w, "unsupported language", http.StatusBadRequest)
+		return
+	}
+	u := current(r)
+	if u != nil && !s.validCSRF(r) {
+		http.Error(w, "invalid csrf token", http.StatusForbidden)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     langCookie,
+		Value:    string(lang),
+		Path:     "/",
+		MaxAge:   365 * 24 * 60 * 60,
+		HttpOnly: false, // readable by JS is fine — no secret content.
+		Secure:   s.secureCookie,
+		SameSite: http.SameSiteLaxMode,
+	})
+	if u != nil {
+		if err := s.store.SetUserLanguage(u.ID, string(lang)); err != nil {
+			s.serverError(w, err)
+			return
+		}
+	}
+	to := r.FormValue("return_to")
+	if to == "" || !strings.HasPrefix(to, "/") || strings.HasPrefix(to, "//") {
+		to = "/"
+	}
+	http.Redirect(w, r, to, http.StatusSeeOther)
 }
 
 func securityHeaders(next http.Handler) http.Handler {
@@ -145,11 +215,47 @@ func securityHeaders(next http.Handler) http.Handler {
 func (s *Server) withUser(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u, _ := s.currentUser(r)
+		ctx := r.Context()
 		if u != nil {
-			r = r.WithContext(context.WithValue(r.Context(), userKey, u))
+			ctx = context.WithValue(ctx, userKey, u)
 		}
-		next(w, r)
+		ctx = context.WithValue(ctx, langKey, detectLang(r, u))
+		next(w, r.WithContext(ctx))
 	}
+}
+
+// detectLang resolves the request's UI language. Precedence:
+//  1. Logged-in user's saved preference (users.language).
+//  2. sinau_lang cookie (anonymous visitors and pre-login choice).
+//  3. Accept-Language header.
+//  4. Default (English).
+func detectLang(r *http.Request, u *domain.User) i18n.Lang {
+	userLang := ""
+	if u != nil {
+		userLang = u.Language
+	}
+	cookieLang := ""
+	if c, err := r.Cookie(langCookie); err == nil {
+		cookieLang = c.Value
+	}
+	return i18n.Detect(userLang, cookieLang, r.Header.Get("Accept-Language"))
+}
+
+func currentLang(r *http.Request) i18n.Lang {
+	if v, ok := r.Context().Value(langKey).(i18n.Lang); ok {
+		return v
+	}
+	return i18n.Default
+}
+
+// safeReturnPath sanitises a path for use as the language picker's
+// return_to value. We only ever accept absolute single-slash paths to
+// avoid open redirects.
+func safeReturnPath(p string) string {
+	if p == "" || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") {
+		return "/"
+	}
+	return p
 }
 
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
@@ -206,13 +312,21 @@ func (s *Server) rateLimit(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// pageData seeds a PageData with the bits every authenticated page needs:
-// the current user, a session-scoped CSRF token, and their lifetime points
-// total (used by the topbar chip). Handlers extend it with page-specific
-// fields.
-func (s *Server) pageData(r *http.Request, title string) PageData {
+// pageData seeds a PageData with the bits every page needs: language,
+// supported languages for the picker, notifications gating, and (for
+// authenticated pages) the current user, CSRF token, and lifetime points.
+// titleKey is an i18n key resolved on the page's active language.
+func (s *Server) pageData(r *http.Request, titleKey string) PageData {
 	u := current(r)
-	pd := PageData{Title: title, NotificationsEnabled: s.notificationsEnabled}
+	lang := currentLang(r)
+	pd := PageData{
+		TitleKey:             titleKey,
+		Title:                i18n.T(lang, titleKey),
+		Lang:                 lang,
+		SupportedLangs:       i18n.Supported,
+		RequestPath:          safeReturnPath(r.URL.Path),
+		NotificationsEnabled: s.notificationsEnabled,
+	}
 	if u != nil {
 		pd.User = u
 		pd.CSRF = s.csrfFor(r)
@@ -224,7 +338,9 @@ func (s *Server) pageData(r *http.Request, title string) PageData {
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	u := current(r)
 	if u == nil {
-		s.render(w, "landing", PageData{Title: "Mentor-led learning rooms", SetupNeeded: s.store.UserCount() == 0})
+		pd := s.pageData(r, "title.landing")
+		pd.SetupNeeded = s.store.UserCount() == 0
+		s.render(w, "landing", pd)
 		return
 	}
 	if s.store.CanCreateRooms(u.ID) || s.store.IsMentor(u.ID) {
@@ -233,21 +349,21 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 			s.serverError(w, err)
 			return
 		}
-		pd := s.pageData(r, "Mentor Dashboard")
+		pd := s.pageData(r, "title.dashboard.mentor")
 		pd.Rooms = dash.Rooms
 		pd.MentorDash = dash
 		s.render(w, "mentor_home", pd)
 		return
 	}
-	dash, err := s.store.LearnerDashboard(u.ID)
+	dash, err := s.store.MenteeDashboard(u.ID)
 	if err != nil {
 		s.serverError(w, err)
 		return
 	}
-	pd := s.pageData(r, "My Progress")
+	pd := s.pageData(r, "title.dashboard.mentee")
 	pd.Rooms = dash.Rooms
-	pd.LearnerDash = dash
-	s.render(w, "learner_home", pd)
+	pd.MenteeDash = dash
+	s.render(w, "mentee_home", pd)
 }
 
 func (s *Server) setupForm(w http.ResponseWriter, r *http.Request) {
@@ -255,7 +371,7 @@ func (s *Server) setupForm(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	s.render(w, "setup", PageData{Title: "Setup"})
+	s.render(w, "setup", s.pageData(r, "title.setup"))
 }
 
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
@@ -267,7 +383,9 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(auth.Clean(r.FormValue("email"), 160))
 	password := r.FormValue("password")
 	if name == "" || !auth.ValidEmail(email) || len(password) < 12 {
-		s.render(w, "setup", PageData{Title: "Setup", Error: "Use a name, valid email, and password with at least 12 characters."})
+		pd := s.pageData(r, "title.setup")
+		pd.Error = i18n.T(pd.Lang, "setup.error.invalid")
+		s.render(w, "setup", pd)
 		return
 	}
 	hash, err := auth.HashPassword(password)
@@ -284,6 +402,8 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
+	// Carry the pre-login language choice (if any) to the new user.
+	s.persistLangChoice(r, uid)
 	if err := s.issueSession(w, uid); err != nil {
 		s.serverError(w, err)
 		return
@@ -291,12 +411,31 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// persistLangChoice copies the visitor's sinau_lang cookie (set via the
+// picker before they had an account) onto their newly-created user record,
+// so the choice survives login and is used for notification content.
+func (s *Server) persistLangChoice(r *http.Request, userID string) {
+	c, err := r.Cookie(langCookie)
+	if err != nil {
+		return
+	}
+	lang := i18n.Lang(strings.ToLower(strings.TrimSpace(c.Value)))
+	if !i18n.IsValid(lang) || lang == i18n.Default {
+		return
+	}
+	if err := s.store.SetUserLanguage(userID, string(lang)); err != nil {
+		log.Printf("persist lang choice user=%s: %v", userID, err)
+	}
+}
+
 func (s *Server) loginForm(w http.ResponseWriter, r *http.Request) {
 	if current(r) != nil {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	s.render(w, "login", PageData{Title: "Login", SetupNeeded: s.store.UserCount() == 0})
+	pd := s.pageData(r, "title.login")
+	pd.SetupNeeded = s.store.UserCount() == 0
+	s.render(w, "login", pd)
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
@@ -311,7 +450,9 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	ok := auth.VerifyPassword(password, verifyAgainst)
 	if lookupErr != nil || !ok {
-		s.render(w, "login", PageData{Title: "Login", Error: "Invalid email or password."})
+		pd := s.pageData(r, "title.login")
+		pd.Error = i18n.T(pd.Lang, "login.error")
+		s.render(w, "login", pd)
 		return
 	}
 	if err := s.issueSession(w, uid); err != nil {
@@ -335,7 +476,8 @@ func (s *Server) joinForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := auth.Clean(r.URL.Query().Get("code"), 120)
-	pd := PageData{Title: "Join", JoinCode: code}
+	pd := s.pageData(r, "title.join")
+	pd.JoinCode = code
 	if code != "" {
 		pd.InvitePreview = s.store.InvitePreview(code)
 	}
@@ -349,7 +491,11 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 	preview := s.store.InvitePreview(code)
 	if code == "" || name == "" || !auth.ValidEmail(email) || len(password) < 12 {
-		s.render(w, "join", PageData{Title: "Join", JoinCode: code, InvitePreview: preview, Error: "Use invite code, name, valid email, and password with at least 12 characters."})
+		pd := s.pageData(r, "title.join")
+		pd.JoinCode = code
+		pd.InvitePreview = preview
+		pd.Error = i18n.T(pd.Lang, "join.error.invalid")
+		s.render(w, "join", pd)
 		return
 	}
 	hash, err := auth.HashPassword(password)
@@ -359,9 +505,14 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	}
 	uid, roomID, err := s.store.JoinWithInvite(code, name, email, hash)
 	if err != nil {
-		s.render(w, "join", PageData{Title: "Join", JoinCode: code, InvitePreview: preview, Error: "Invite is invalid, used, expired, or the email is already registered."})
+		pd := s.pageData(r, "title.join")
+		pd.JoinCode = code
+		pd.InvitePreview = preview
+		pd.Error = i18n.T(pd.Lang, "join.error.failed")
+		s.render(w, "join", pd)
 		return
 	}
+	s.persistLangChoice(r, uid)
 	if err := s.issueSession(w, uid); err != nil {
 		s.serverError(w, err)
 		return
@@ -410,16 +561,18 @@ func (s *Server) roomPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rm.Role = role
-	learners := make([]domain.Member, 0, len(data.Members))
+	mentees := make([]domain.Member, 0, len(data.Members))
 	for _, m := range data.Members {
-		if m.Role == domain.RoleLearner {
-			learners = append(learners, m)
+		if m.Role == domain.RoleMentee {
+			mentees = append(mentees, m)
 		}
 	}
-	pd := s.pageData(r, rm.Name)
+	pd := s.pageData(r, "")
+	pd.Title = rm.Name
+	pd.TitleKey = ""
 	pd.Room = rm
 	pd.Members = data.Members
-	pd.RoomLearners = learners
+	pd.RoomMentees = mentees
 	pd.Reports = data.Reports
 	pd.Tasks = data.Tasks
 	pd.Assignments = data.Classroom.Assignments
@@ -429,7 +582,7 @@ func (s *Server) roomPage(w http.ResponseWriter, r *http.Request) {
 	pd.Stats = data.Stats
 	pd.MyPoints = data.MyPoints
 	pd.MyRank = data.MyRank
-	// data.Leaderboard is already empty for learners in rooms with the
+	// data.Leaderboard is already empty for mentees in rooms with the
 	// visibility toggle off (see RoomData), so a direct copy is safe.
 	pd.Leaderboard = data.Leaderboard
 	s.render(w, "room", pd)
@@ -444,7 +597,7 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	inviteRole := r.FormValue("role")
-	if inviteRole != domain.RoleMentor && inviteRole != domain.RoleLearner {
+	if inviteRole != domain.RoleMentor && inviteRole != domain.RoleMentee {
 		http.Error(w, "bad invite role", http.StatusBadRequest)
 		return
 	}
@@ -457,7 +610,9 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
-	s.render(w, "invite_created", PageData{InviteCode: code})
+	pd := s.pageData(r, "")
+	pd.InviteCode = code
+	s.render(w, "invite_created", pd)
 }
 
 func (s *Server) createReport(w http.ResponseWriter, r *http.Request) {
@@ -510,7 +665,7 @@ func (s *Server) reportPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rm.Role = role
-	pd := s.pageData(r, "Report")
+	pd := s.pageData(r, "title.report")
 	pd.Room = rm
 	pd.Report = rep
 	pd.Comments = comments
@@ -543,7 +698,7 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 }
 
 // assignAllSentinel is the form value used to mean "create one task per
-// learner in this room". It is intentionally not a valid 32-char hex user
+// mentee in this room". It is intentionally not a valid 32-char hex user
 // ID so it can never collide with a real assignee.
 const assignAllSentinel = "all"
 
@@ -570,18 +725,18 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if assignedTo == assignAllSentinel {
-		count, err := s.store.CreateTaskForLearners(roomID, u.ID, title, detail, dueDate)
+		count, err := s.store.CreateTaskForMentees(roomID, u.ID, title, detail, dueDate)
 		if err != nil {
 			s.serverError(w, err)
 			return
 		}
 		if count == 0 {
-			http.Error(w, "no learners in this room to assign", http.StatusBadRequest)
+			http.Error(w, "no mentees in this room to assign", http.StatusBadRequest)
 			return
 		}
 	} else {
-		if !s.store.IsLearner(roomID, assignedTo) {
-			http.Error(w, "assignee must be a learner in this room", http.StatusBadRequest)
+		if !s.store.IsMentee(roomID, assignedTo) {
+			http.Error(w, "assignee must be a mentee in this room", http.StatusBadRequest)
 			return
 		}
 		if err := s.store.CreateTask(roomID, assignedTo, u.ID, title, detail, dueDate); err != nil {
@@ -677,7 +832,7 @@ func (s *Server) submitAssignment(w http.ResponseWriter, r *http.Request) {
 	u := current(r)
 	roomID, assignmentID := r.PathValue("roomID"), r.PathValue("assignmentID")
 	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
-	if !ok || role != domain.RoleLearner || rm.Mode != domain.RoomModeClassroom {
+	if !ok || role != domain.RoleMentee || rm.Mode != domain.RoomModeClassroom {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -746,10 +901,10 @@ func (s *Server) updateRoomSettings(w http.ResponseWriter, r *http.Request) {
 // inside the handlers — the route layer owns the gate.
 func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 	u := current(r)
-	pd := s.pageData(r, "Settings")
+	pd := s.pageData(r, "title.settings")
 	pd.Prefs = s.store.NotificationPrefsFor(u.ID)
 	if notice := r.URL.Query().Get("saved"); notice == "1" {
-		pd.Notice = "Notification settings saved."
+		pd.Notice = i18n.T(pd.Lang, "settings.saved")
 	}
 	s.render(w, "settings", pd)
 }
@@ -781,7 +936,7 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) helpPage(w http.ResponseWriter, r *http.Request) {
-	pd := s.pageData(r, "How Sinau Works")
+	pd := s.pageData(r, "title.help")
 	pd.SetupNeeded = s.store.UserCount() == 0
 	s.render(w, "help", pd)
 }

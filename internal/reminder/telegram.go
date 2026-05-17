@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"sinau/internal/domain"
+	"sinau/internal/i18n"
 )
 
 // TelegramConfig holds credentials for the Telegram Bot API. Leaving
@@ -73,8 +74,13 @@ func (t *TelegramNotifier) NotifyTaskDue(ctx context.Context, to Recipient, rem 
 	// Stub: prove DI works end-to-end. Replace this block with the real
 	// Bot API call when wiring lands. We return nil so the worker proceeds
 	// to MarkTaskReminded — no retry storm against a non-existent API.
-	log.Printf("[stub] telegram would send to=%s task=%q due=%s room=%q",
-		to.Telegram, rem.Title, rem.DueDate, rem.RoomName)
+	lang := i18n.Lang(to.Language)
+	if !i18n.IsValid(lang) {
+		lang = i18n.Default
+	}
+	body := i18n.Tf(lang, "notif.task_due.short", rem.Title, rem.RoomName, rem.DueDate)
+	log.Printf("[stub] telegram would send to=%s lang=%s body=%q",
+		to.Telegram, lang, body)
 	_ = t.client // silence "unused" until the real call lands.
 	return nil
 }

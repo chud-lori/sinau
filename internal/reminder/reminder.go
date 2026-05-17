@@ -43,7 +43,8 @@ type Recipient struct {
 	UserID   string
 	Name     string
 	Channel  string
-	Role     string // "mentor" or "learner" — useful for future filters / templates.
+	Role     string // "mentor" or "mentee" — useful for future filters / templates.
+	Language string // BCP-47 tag from users.language; falls through to i18n.Default if empty.
 	Email    string
 	WhatsApp string // E.164 phone number, e.g. "+6281234567890".
 	Telegram string // Telegram chat ID (numeric string; channels use negative IDs).
@@ -140,7 +141,8 @@ func (w *Worker) dispatch(ctx context.Context, rem domain.TaskReminder) {
 		UserID:   rem.AssigneeID,
 		Name:     rem.AssigneeName,
 		Channel:  prefs.Channel,
-		Role:     domain.RoleLearner,
+		Role:     domain.RoleMentee,
+		Language: rem.AssigneeLanguage,
 		Email:    rem.AssigneeEmail,
 		WhatsApp: prefs.WhatsAppNumber,
 		Telegram: prefs.TelegramChatID,

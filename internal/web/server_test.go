@@ -85,17 +85,17 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
-// classroomHarness sets up a fresh server with one mentor + one learner
+// classroomHarness sets up a fresh server with one mentor + one mentee
 // already joined into a single classroom room. Returns the harness ready
 // for HTTP-level tests of the classroom routes.
 type classroomHarness struct {
-	t              *testing.T
-	handler        http.Handler
-	mentorCookies  []*http.Cookie
-	learnerCookies []*http.Cookie
-	mentorCSRF     string
-	learnerCSRF    string
-	roomID         string
+	t             *testing.T
+	handler       http.Handler
+	mentorCookies []*http.Cookie
+	menteeCookies []*http.Cookie
+	mentorCSRF    string
+	menteeCSRF    string
+	roomID        string
 }
 
 func newClassroomHarness(t *testing.T) *classroomHarness {
@@ -161,16 +161,16 @@ func newClassroomHarness(t *testing.T) *classroomHarness {
 	}
 	roomID := strings.TrimPrefix(roomRR.Result().Header.Get("Location"), "/rooms/")
 
-	// Mentor creates a learner invite.
+	// Mentor creates a mentee invite.
 	inviteRR := post("/rooms/"+roomID+"/invites", mentorCookies, url.Values{
-		"csrf": {mentorCSRF}, "role": {"learner"},
+		"csrf": {mentorCSRF}, "role": {"mentee"},
 	})
 	if inviteRR.Code != http.StatusOK {
 		t.Fatalf("invite status = %d body=%s", inviteRR.Code, inviteRR.Body.String())
 	}
 	inviteCode := between(inviteRR.Body.String(), "<code>", "</code>")
 
-	// Learner joins.
+	// Mentee joins.
 	joinRR := post("/join", nil, url.Values{
 		"code": {inviteCode}, "name": {"Student"},
 		"email": {"student@example.com"}, "password": {"verysecurepass123"},
@@ -178,17 +178,17 @@ func newClassroomHarness(t *testing.T) *classroomHarness {
 	if joinRR.Code != http.StatusSeeOther {
 		t.Fatalf("join status = %d body=%s", joinRR.Code, joinRR.Body.String())
 	}
-	learnerCookies := joinRR.Result().Cookies()
-	learnerCSRF := between(get("/rooms/"+roomID, learnerCookies).Body.String(), `name="csrf" value="`, `"`)
+	menteeCookies := joinRR.Result().Cookies()
+	menteeCSRF := between(get("/rooms/"+roomID, menteeCookies).Body.String(), `name="csrf" value="`, `"`)
 
 	return &classroomHarness{
-		t:              t,
-		handler:        h,
-		mentorCookies:  mentorCookies,
-		learnerCookies: learnerCookies,
-		mentorCSRF:     mentorCSRF,
-		learnerCSRF:    learnerCSRF,
-		roomID:         roomID,
+		t:             t,
+		handler:       h,
+		mentorCookies: mentorCookies,
+		menteeCookies: menteeCookies,
+		mentorCSRF:    mentorCSRF,
+		menteeCSRF:    menteeCSRF,
+		roomID:        roomID,
 	}
 }
 
@@ -206,15 +206,15 @@ func (h *classroomHarness) post(path string, cookies []*http.Cookie, form url.Va
 func TestClassroomAssignmentFlowEnforcesRoleAndMode(t *testing.T) {
 	h := newClassroomHarness(t)
 
-	// Learner cannot create an assignment.
-	bad := h.post("/rooms/"+h.roomID+"/assignments", h.learnerCookies, url.Values{
-		"csrf":         {h.learnerCSRF},
-		"title":        {"Learner-published"},
+	// Mentee cannot create an assignment.
+	bad := h.post("/rooms/"+h.roomID+"/assignments", h.menteeCookies, url.Values{
+		"csrf":         {h.menteeCSRF},
+		"title":        {"Mentee-published"},
 		"instructions": {"should fail"},
 		"due_date":     {"2026-12-01"},
 	})
 	if bad.Code != http.StatusForbidden {
-		t.Fatalf("learner publishing assignment: want 403, got %d", bad.Code)
+		t.Fatalf("mentee publishing assignment: want 403, got %d", bad.Code)
 	}
 
 	// Mentor publishes a valid assignment.
@@ -238,12 +238,12 @@ func TestClassroomAssignmentFlowEnforcesRoleAndMode(t *testing.T) {
 		h.handler.ServeHTTP(rr, req)
 		return rr.Body.String()
 	}
-	body := roomBody(h.learnerCookies)
-	// Pull the assignment ID from the learner's submission form action.
+	body := roomBody(h.menteeCookies)
+	// Pull the assignment ID from the mentee's submission form action.
 	prefix := "/rooms/" + h.roomID + "/assignments/"
 	start := strings.Index(body, prefix)
 	if start < 0 {
-		t.Fatal("could not find assignment submission form in learner room body")
+		t.Fatal("could not find assignment submission form in mentee room body")
 	}
 	tail := body[start+len(prefix):]
 	end := strings.Index(tail, "/submissions")
@@ -260,23 +260,23 @@ func TestClassroomAssignmentFlowEnforcesRoleAndMode(t *testing.T) {
 		t.Fatalf("mentor submitting: want 403, got %d", mentorSubmit.Code)
 	}
 
-	// Learner submits with a bad URL → 400.
-	badURL := h.post("/rooms/"+h.roomID+"/assignments/"+assignmentID+"/submissions", h.learnerCookies, url.Values{
-		"csrf":     {h.learnerCSRF},
+	// Mentee submits with a bad URL → 400.
+	badURL := h.post("/rooms/"+h.roomID+"/assignments/"+assignmentID+"/submissions", h.menteeCookies, url.Values{
+		"csrf":     {h.menteeCSRF},
 		"link_url": {"javascript:alert(1)"},
 	})
 	if badURL.Code != http.StatusBadRequest {
-		t.Fatalf("learner submit bad URL: want 400, got %d", badURL.Code)
+		t.Fatalf("mentee submit bad URL: want 400, got %d", badURL.Code)
 	}
 
-	// Learner submits properly.
-	goodSubmit := h.post("/rooms/"+h.roomID+"/assignments/"+assignmentID+"/submissions", h.learnerCookies, url.Values{
-		"csrf":     {h.learnerCSRF},
+	// Mentee submits properly.
+	goodSubmit := h.post("/rooms/"+h.roomID+"/assignments/"+assignmentID+"/submissions", h.menteeCookies, url.Values{
+		"csrf":     {h.menteeCSRF},
 		"link_url": {"https://docs.google.com/work"},
 		"note":     {"first pass"},
 	})
 	if goodSubmit.Code != http.StatusSeeOther {
-		t.Fatalf("learner submit: want 303, got %d body=%s", goodSubmit.Code, goodSubmit.Body.String())
+		t.Fatalf("mentee submit: want 303, got %d body=%s", goodSubmit.Code, goodSubmit.Body.String())
 	}
 
 	// Find submission ID from mentor's room view (status 'submitted' card).
@@ -293,15 +293,15 @@ func TestClassroomAssignmentFlowEnforcesRoleAndMode(t *testing.T) {
 	}
 	submissionID := subTail[:subEnd]
 
-	// Learner cannot review.
-	learnerReview := h.post("/rooms/"+h.roomID+"/submissions/"+submissionID+"/review", h.learnerCookies, url.Values{
-		"csrf":     {h.learnerCSRF},
+	// Mentee cannot review.
+	menteeReview := h.post("/rooms/"+h.roomID+"/submissions/"+submissionID+"/review", h.menteeCookies, url.Values{
+		"csrf":     {h.menteeCSRF},
 		"status":   {"reviewed"},
 		"feedback": {"good"},
 		"score":    {"85"},
 	})
-	if learnerReview.Code != http.StatusForbidden {
-		t.Fatalf("learner review: want 403, got %d", learnerReview.Code)
+	if menteeReview.Code != http.StatusForbidden {
+		t.Fatalf("mentee review: want 403, got %d", menteeReview.Code)
 	}
 
 	// Mentor with bad status → 400.

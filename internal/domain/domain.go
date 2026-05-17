@@ -3,8 +3,8 @@ package domain
 import "database/sql"
 
 const (
-	RoleMentor  = "mentor"
-	RoleLearner = "learner"
+	RoleMentor = "mentor"
+	RoleMentee = "mentee"
 )
 
 const (
@@ -24,9 +24,10 @@ func ValidRoomMode(s string) bool {
 }
 
 type User struct {
-	ID    string
-	Name  string
-	Email string
+	ID       string
+	Name     string
+	Email    string
+	Language string
 }
 
 type Room struct {
@@ -39,7 +40,7 @@ type Room struct {
 }
 
 // RoleLabel returns the user-facing label for a role within this room's
-// mode. Mentorship rooms use "Mentor" / "Learner"; classroom rooms use
+// mode. Mentorship rooms use "Mentor" / "Mentee"; classroom rooms use
 // "Teacher" / "Student". Templates should never render raw role/mode
 // strings — always go through this helper.
 func (r Room) RoleLabel(role string) string {
@@ -47,15 +48,15 @@ func (r Room) RoleLabel(role string) string {
 		switch role {
 		case RoleMentor:
 			return "Teacher"
-		case RoleLearner:
+		case RoleMentee:
 			return "Student"
 		}
 	}
 	switch role {
 	case RoleMentor:
 		return "Mentor"
-	case RoleLearner:
-		return "Learner"
+	case RoleMentee:
+		return "Mentee"
 	}
 	return role
 }
@@ -177,7 +178,7 @@ type Assignment struct {
 	DueDate            string
 	CreatedAt          string
 	Submitted          int
-	TotalLearners      int
+	TotalMentees       int
 	MySubmissionStatus string
 	MySubmissionURL    string
 	MyFeedback         string
@@ -223,15 +224,15 @@ func (p InvitePreview) RoleLabel() string {
 		switch p.Role {
 		case RoleMentor:
 			return "Teacher"
-		case RoleLearner:
+		case RoleMentee:
 			return "Student"
 		}
 	}
 	switch p.Role {
 	case RoleMentor:
 		return "Mentor"
-	case RoleLearner:
-		return "Learner"
+	case RoleMentee:
+		return "Mentee"
 	}
 	return p.Role
 }
@@ -248,24 +249,25 @@ func (p InvitePreview) ModeLabel() string {
 }
 
 type Stats struct {
-	BlockedReports   int
-	WaitingReports   int
-	InactiveLearners int
-	OpenTasks        int
-	DueSoonTasks     int
-	OverdueTasks     int
+	BlockedReports  int
+	WaitingReports  int
+	InactiveMentees int
+	OpenTasks       int
+	DueSoonTasks    int
+	OverdueTasks    int
 }
 
 type TaskReminder struct {
-	TaskID        string
-	Title         string
-	Detail        string
-	DueDate       string
-	RoomID        string
-	RoomName      string
-	AssigneeID    string
-	AssigneeName  string
-	AssigneeEmail string
+	TaskID           string
+	Title            string
+	Detail           string
+	DueDate          string
+	RoomID           string
+	RoomName         string
+	AssigneeID       string
+	AssigneeName     string
+	AssigneeEmail    string
+	AssigneeLanguage string
 }
 
 type RoomData struct {
@@ -284,10 +286,10 @@ type MentorDashboard struct {
 	Rooms          []Room
 	Summary        DashboardSummary
 	AttentionItems []AttentionItem
-	Learners       []LearnerProgress
+	Mentees        []MenteeProgress
 }
 
-type LearnerDashboard struct {
+type MenteeDashboard struct {
 	Rooms         []Room
 	Summary       DashboardSummary
 	Tasks         []Task
@@ -295,15 +297,15 @@ type LearnerDashboard struct {
 }
 
 type DashboardSummary struct {
-	Rooms            int
-	ActiveLearners   int
-	WaitingFeedback  int
-	Blockers         int
-	OpenTasks        int
-	DueSoonTasks     int
-	OverdueTasks     int
-	InactiveLearners int
-	ReportsThisWeek  int
+	Rooms           int
+	ActiveMentees   int
+	WaitingFeedback int
+	Blockers        int
+	OpenTasks       int
+	DueSoonTasks    int
+	OverdueTasks    int
+	InactiveMentees int
+	ReportsThisWeek int
 }
 
 type AttentionItem struct {
@@ -318,7 +320,7 @@ type AttentionItem struct {
 	CreatedAt string
 }
 
-type LearnerProgress struct {
+type MenteeProgress struct {
 	UserID          string
 	Name            string
 	Email           string
