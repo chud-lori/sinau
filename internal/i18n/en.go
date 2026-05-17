@@ -42,7 +42,7 @@ func init() {
 
 		// Landing
 		"landing.eyebrow":             "Private learning rooms",
-		"landing.lede":                "Run small mentorship cohorts with weekly reports and tasks, or run a classroom with assignments and submission review — two room formats, one private workspace.",
+		"landing.subtitle":                "Run small mentorship cohorts with weekly reports and tasks, or run a classroom with assignments and submission review — two room formats, one private workspace.",
 		"landing.cta.create_first":    "Create first room",
 		"landing.cta.guide":           "Read guide",
 		"landing.cta.login":           "Login",
@@ -91,14 +91,14 @@ func init() {
 		// Setup
 		"setup.eyebrow": "Private learning rooms",
 		"setup.title":   "Set Up Mentor Account",
-		"setup.lede":    "Create the first mentor account. After setup, create a room and choose the workflow that fits it.",
+		"setup.subtitle":    "Create the first mentor account. After setup, create a room and choose the workflow that fits it.",
 		"setup.submit":  "Create mentor account",
 		"setup.error.invalid": "Use a name, valid email, and password with at least 12 characters.",
 
 		// Login
 		"login.eyebrow":     "Progress tracking",
 		"login.title":       "Login",
-		"login.lede":        "Open your learning room, review reports, and keep next actions visible.",
+		"login.subtitle":        "Open your learning room, review reports, and keep next actions visible.",
 		"login.no_mentor":   "No mentor exists yet.",
 		"login.create_link": "Create the first room",
 		"login.submit":      "Login",
@@ -121,10 +121,10 @@ func init() {
 		// Mentor dashboard
 		"mentor.eyebrow":     "Mentor command center",
 		"mentor.welcome":     "Welcome back, %s",
-		"mentor.lede":        "Start with blockers, overdue tasks, submissions awaiting review, and reports needing feedback.",
+		"mentor.subtitle":        "Start with blockers, overdue tasks, submissions awaiting review, and reports needing feedback.",
 		"mentor.create.eyebrow": "New room",
 		"mentor.create.title":   "Create a room",
-		"mentor.create.lede":    "Use Mentorship for guided cohorts with reports, blockers, and tasks. Use Classroom for assignments and submission review.",
+		"mentor.create.subtitle":    "Use Mentorship for guided cohorts with reports, blockers, and tasks. Use Classroom for assignments and submission review.",
 		"mentor.create.name_placeholder": "e.g. Backend cohort",
 		"mentor.create.mode_aria":       "Room format",
 		"mentor.create.submit":          "Create room",
@@ -158,7 +158,7 @@ func init() {
 		// Mentee dashboard
 		"mentee.eyebrow": "My learning dashboard",
 		"mentee.title":   "Keep momentum visible",
-		"mentee.lede":    "Track your assigned work, deadlines, recent reports, and feedback from mentors.",
+		"mentee.subtitle":    "Track your assigned work, deadlines, recent reports, and feedback from mentors.",
 		"mentee.summary.rooms":   "Rooms",
 		"mentee.summary.open":    "Open tasks",
 		"mentee.summary.due":     "Due soon",
@@ -188,10 +188,10 @@ func init() {
 		"room.open_submission":    "Open submission",
 		"room.review_report":      "Review report",
 		// Hero ledes per (role, mode)
-		"room.lede.mentor.mentorship": "Review reports, unblock mentees, and assign the next concrete task.",
-		"room.lede.mentor.classroom":  "Publish assignments, review submissions, and keep the class on track.",
-		"room.lede.mentee.classroom":  "Submit assignments, watch for feedback, and resubmit when your teacher asks for revisions.",
-		"room.lede.mentee.mentorship": "Submit progress, track assigned tasks, and keep mentor feedback in one place.",
+		"room.subtitle.mentor.mentorship": "Review reports, unblock mentees, and assign the next concrete task.",
+		"room.subtitle.mentor.classroom":  "Publish assignments, review submissions, and keep the class on track.",
+		"room.subtitle.mentee.classroom":  "Submit assignments, watch for feedback, and resubmit when your teacher asks for revisions.",
+		"room.subtitle.mentee.mentorship": "Submit progress, track assigned tasks, and keep mentor feedback in one place.",
 		// Classroom — teacher stats / queue
 		"room.classroom.stats.students":     "Students",
 		"room.classroom.stats.assignments":  "Assignments",
@@ -357,7 +357,7 @@ func init() {
 		// Settings page
 		"settings.eyebrow":           "Account",
 		"settings.title":             "Notification settings",
-		"settings.lede":              "Choose how Sinau pings you about task deadlines. Notifications are off by default — turn them on to start receiving reminders.",
+		"settings.subtitle":              "Choose how Sinau pings you about task deadlines. Notifications are off by default — turn them on to start receiving reminders.",
 		"settings.enabled":           "Send me deadline reminders",
 		"settings.channel.off":       "Off",
 		"settings.channel.email":     "Email — %s",
@@ -375,7 +375,7 @@ func init() {
 		// Help page
 		"help.eyebrow":   "Getting started",
 		"help.title":     "How Sinau works",
-		"help.lede":      "Sinau is a private learning tracker with two room formats: Mentorship for progress check-ins and Classroom for assignments, submissions, and review.",
+		"help.subtitle":      "Sinau is a private learning tracker with two room formats: Mentorship for progress check-ins and Classroom for assignments, submissions, and review.",
 		"help.cta.create": "Create first room",
 		"help.cta.login":  "Login",
 		"help.cta.join":   "Join with invite",

@@ -42,7 +42,7 @@ func init() {
 
 		// Landing — copy yang marketing-able, bukan terjemahan kaku
 		"landing.eyebrow":              "Ruang belajar privat",
-		"landing.lede":                 "Pantau progres mentee lewat laporan mingguan dan tugas, atau buka kelas dengan alur pemberian tugas dan review. Semua di satu tempat yang privat.",
+		"landing.subtitle":                 "Pantau progres mentee lewat laporan mingguan dan tugas, atau buka kelas dengan alur pemberian tugas dan review. Semua di satu tempat yang privat.",
 		"landing.cta.create_first":     "Buat ruang pertama",
 		"landing.cta.guide":            "Lihat panduan",
 		"landing.cta.login":            "Masuk",
@@ -91,14 +91,14 @@ func init() {
 		// Setup (one-time)
 		"setup.eyebrow":         "Ruang belajar privat",
 		"setup.title":           "Buat Akun Mentor Pertama",
-		"setup.lede":            "Daftarkan akun mentor pertama dulu. Nanti kamu bisa bikin ruang dan pilih format yang pas.",
+		"setup.subtitle":            "Daftarkan akun mentor pertama dulu. Nanti kamu bisa bikin ruang dan pilih format yang pas.",
 		"setup.submit":          "Buat akun mentor",
 		"setup.error.invalid":   "Isi nama, email valid, dan password minimal 12 karakter.",
 
 		// Login
 		"login.eyebrow":     "Lacak progres",
 		"login.title":       "Masuk",
-		"login.lede":        "Buka ruangmu, baca laporan, pastikan langkah berikutnya jelas.",
+		"login.subtitle":        "Buka ruangmu, baca laporan, pastikan langkah berikutnya jelas.",
 		"login.no_mentor":   "Belum ada akun mentor.",
 		"login.create_link": "Buat akun pertama",
 		"login.submit":      "Masuk",
@@ -121,10 +121,10 @@ func init() {
 		// Mentor dashboard
 		"mentor.eyebrow":                  "Pusat kontrol mentor",
 		"mentor.welcome":                  "Selamat datang lagi, %s",
-		"mentor.lede":                     "Cek hambatan, tugas lewat deadline, pengumpulan yang menunggu review, dan laporan yang butuh feedback.",
+		"mentor.subtitle":                     "Cek hambatan, tugas lewat deadline, pengumpulan yang menunggu review, dan laporan yang butuh feedback.",
 		"mentor.create.eyebrow":           "Ruang baru",
 		"mentor.create.title":             "Bikin ruang",
-		"mentor.create.lede":              "Pilih Bimbingan untuk grup kecil dengan laporan, hambatan, dan tugas. Pilih Kelas untuk alur tugas dan review.",
+		"mentor.create.subtitle":              "Pilih Bimbingan untuk grup kecil dengan laporan, hambatan, dan tugas. Pilih Kelas untuk alur tugas dan review.",
 		"mentor.create.name_placeholder":  "mis. Backend Batch 1",
 		"mentor.create.mode_aria":         "Format ruang",
 		"mentor.create.submit":            "Buat ruang",
@@ -158,7 +158,7 @@ func init() {
 		// Mentee dashboard
 		"mentee.eyebrow":              "Dashboard belajarku",
 		"mentee.title":                "Jaga ritme belajarmu",
-		"mentee.lede":                 "Pantau tugas, deadline, laporan terbaru, dan feedback dari mentor.",
+		"mentee.subtitle":                 "Pantau tugas, deadline, laporan terbaru, dan feedback dari mentor.",
 		"mentee.summary.rooms":        "Ruang",
 		"mentee.summary.open":         "Tugas aktif",
 		"mentee.summary.due":          "Mendekati deadline",
@@ -187,10 +187,10 @@ func init() {
 		"room.open_resource":           "Buka sumber",
 		"room.open_submission":         "Buka kiriman",
 		"room.review_report":           "Kasih feedback",
-		"room.lede.mentor.mentorship":  "Baca laporan, bantu mentee yang terhambat, lalu kasih tugas berikutnya yang konkret.",
-		"room.lede.mentor.classroom":   "Buat tugas, review pengumpulan, pastikan kelas tetap berjalan.",
-		"room.lede.mentee.classroom":   "Kumpulkan tugas, tunggu masukan, dan kumpul ulang kalau guru minta revisi.",
-		"room.lede.mentee.mentorship":  "Kirim progres, lacak tugas, simpan semua masukan mentor di satu tempat.",
+		"room.subtitle.mentor.mentorship":  "Baca laporan, bantu mentee yang terhambat, lalu kasih tugas berikutnya yang konkret.",
+		"room.subtitle.mentor.classroom":   "Buat tugas, review pengumpulan, pastikan kelas tetap berjalan.",
+		"room.subtitle.mentee.classroom":   "Kumpulkan tugas, tunggu masukan, dan kumpul ulang kalau guru minta revisi.",
+		"room.subtitle.mentee.mentorship":  "Kirim progres, lacak tugas, simpan semua masukan mentor di satu tempat.",
 
 		"room.classroom.stats.students":            "Siswa",
 		"room.classroom.stats.assignments":         "Tugas",
@@ -347,7 +347,7 @@ func init() {
 
 		"settings.eyebrow":              "Akun",
 		"settings.title":                "Pengaturan notifikasi",
-		"settings.lede":                 "Pilih cara Sinau mengingatkanmu soal deadline tugas. Notifikasi nonaktif secara default — aktifkan untuk mulai dapat pengingat.",
+		"settings.subtitle":                 "Pilih cara Sinau mengingatkanmu soal deadline tugas. Notifikasi nonaktif secara default — aktifkan untuk mulai dapat pengingat.",
 		"settings.enabled":              "Kirim pengingat deadline ke saya",
 		"settings.channel.off":          "Nonaktif",
 		"settings.channel.email":        "Email — %s",
@@ -364,7 +364,7 @@ func init() {
 
 		"help.eyebrow":           "Mulai dari sini",
 		"help.title":             "Cara kerja Sinau",
-		"help.lede":              "Sinau adalah pencatat progres belajar pribadi dengan dua format ruang: Bimbingan untuk laporan rutin, dan Kelas untuk pemberian tugas, pengumpulan, dan review.",
+		"help.subtitle":              "Sinau adalah pencatat progres belajar pribadi dengan dua format ruang: Bimbingan untuk laporan rutin, dan Kelas untuk pemberian tugas, pengumpulan, dan review.",
 		"help.cta.create":        "Buat ruang pertama",
 		"help.cta.login":         "Masuk",
 		"help.cta.join":          "Gabung dengan undangan",

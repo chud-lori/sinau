@@ -83,7 +83,7 @@
   <div class="landing-content">
     <p class="eyebrow">{{.T "landing.eyebrow"}}</p>
     <h1>Sinau</h1>
-    <p class="landing-lede">{{.T "landing.lede"}}</p>
+    <p class="landing-lede">{{.T "landing.subtitle"}}</p>
     <div class="landing-actions">
       {{if .SetupNeeded}}<a class="button primary" href="/setup">{{.T "landing.cta.create_first"}}</a>{{end}}
       <a class="button secondary" href="/help">{{.T "landing.cta.guide"}}</a>
@@ -131,7 +131,7 @@
   <div class="auth-copy">
     <p class="eyebrow">{{.T "setup.eyebrow"}}</p>
     <h1>{{.T "setup.title"}}</h1>
-    <p class="muted">{{.T "setup.lede"}}</p>
+    <p class="muted">{{.T "setup.subtitle"}}</p>
   </div>
   <form method="post" action="/setup" class="stack">
     <label>{{.T "form.name"}} <input name="name" required autocomplete="name"></label>
@@ -147,7 +147,7 @@
   <div class="auth-copy">
     <p class="eyebrow">{{.T "login.eyebrow"}}</p>
     <h1>{{.T "login.title"}}</h1>
-    <p class="muted">{{.T "login.lede"}}</p>
+    <p class="muted">{{.T "login.subtitle"}}</p>
   </div>
   {{if .SetupNeeded}}<p>{{.T "login.no_mentor"}} <a href="/setup">{{.T "login.create_link"}}</a>.</p>{{end}}
   <form method="post" action="/login" class="stack">
@@ -187,7 +187,7 @@
   <div>
     <p class="eyebrow">{{.T "mentor.eyebrow"}}</p>
     <h1>{{.Tf "mentor.welcome" .User.Name}}</h1>
-    <p class="muted">{{.T "mentor.lede"}}</p>
+    <p class="muted">{{.T "mentor.subtitle"}}</p>
   </div>
 </section>
 
@@ -195,7 +195,7 @@
   <div>
     <p class="eyebrow">{{.T "mentor.create.eyebrow"}}</p>
     <h2>{{.T "mentor.create.title"}}</h2>
-    <p class="muted">{{.T "mentor.create.lede"}}</p>
+    <p class="muted">{{.T "mentor.create.subtitle"}}</p>
   </div>
   <form method="post" action="/rooms" class="create-room-form">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
@@ -283,7 +283,7 @@
   <div>
     <p class="eyebrow">{{.T "mentee.eyebrow"}}</p>
     <h1>{{.T "mentee.title"}}</h1>
-    <p class="muted">{{.T "mentee.lede"}}</p>
+    <p class="muted">{{.T "mentee.subtitle"}}</p>
   </div>
 </section>
 
@@ -335,7 +335,7 @@
   <div>
     <a class="back-link" href="/">{{.T "room.back.all"}}</a>
     <h1>{{.Room.Name}}</h1>
-    <p class="muted">{{if and (eq .Room.Role "mentor") (eq .Room.Mode "classroom")}}{{.T "room.lede.mentor.classroom"}}{{else if eq .Room.Role "mentor"}}{{.T "room.lede.mentor.mentorship"}}{{else if eq .Room.Mode "classroom"}}{{.T "room.lede.mentee.classroom"}}{{else}}{{.T "room.lede.mentee.mentorship"}}{{end}}</p>
+    <p class="muted">{{if and (eq .Room.Role "mentor") (eq .Room.Mode "classroom")}}{{.T "room.subtitle.mentor.classroom"}}{{else if eq .Room.Role "mentor"}}{{.T "room.subtitle.mentor.mentorship"}}{{else if eq .Room.Mode "classroom"}}{{.T "room.subtitle.mentee.classroom"}}{{else}}{{.T "room.subtitle.mentee.mentorship"}}{{end}}</p>
   </div>
   <div class="hero-actions">
     <span class="pill role-pill">{{.RoleLabel .Room.Mode .Room.Role}}</span>
@@ -892,7 +892,7 @@
       <h2>{{.T "settings.title"}}</h2>
     </div>
   </div>
-  <p class="muted">{{.T "settings.lede"}}</p>
+  <p class="muted">{{.T "settings.subtitle"}}</p>
   <form method="post" action="/settings" class="stack">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label class="checkbox-row">
@@ -925,7 +925,7 @@
   <div class="landing-content">
     <p class="eyebrow">{{.T "help.eyebrow"}}</p>
     <h1>{{.T "help.title"}}</h1>
-    <p class="landing-lede">{{.T "help.lede"}}</p>
+    <p class="landing-lede">{{.T "help.subtitle"}}</p>
     <div class="landing-actions">
       {{if .SetupNeeded}}<a class="button primary" href="/setup">{{.T "help.cta.create"}}</a>{{end}}
       {{if not .User}}<a class="button secondary" href="/login">{{.T "help.cta.login"}}</a><a class="button secondary" href="/join">{{.T "help.cta.join"}}</a>{{end}}
