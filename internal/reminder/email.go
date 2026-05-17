@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"sinau/internal/domain"
+	"sinau/internal/i18n"
 )
 
 // SMTPConfig describes how to reach an outbound SMTP relay. When Host is
@@ -54,19 +55,23 @@ func (e *EmailNotifier) NotifyTaskDue(ctx context.Context, to Recipient, rem dom
 	if to.Email == "" {
 		return fmt.Errorf("recipient %s has no email address", to.UserID)
 	}
-	subject := fmt.Sprintf("Sinau: task %q due %s", rem.Title, rem.DueDate)
-	body := buildBody(to, rem)
+	lang := i18n.Lang(to.Language)
+	if !i18n.IsValid(lang) {
+		lang = i18n.Default
+	}
+	subject := i18n.Tf(lang, "notif.task_due.subject", rem.Title, rem.DueDate)
+	body := buildBody(lang, to, rem)
 	return e.send(ctx, to.Email, subject, body)
 }
 
-func buildBody(to Recipient, rem domain.TaskReminder) string {
+func buildBody(lang i18n.Lang, to Recipient, rem domain.TaskReminder) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Hi %s,\n\n", to.Name)
-	fmt.Fprintf(&b, "Your task %q in room %q is due on %s.\n\n", rem.Title, rem.RoomName, rem.DueDate)
+	fmt.Fprintf(&b, "%s\n\n", i18n.Tf(lang, "notif.task_due.greeting", to.Name))
+	fmt.Fprintf(&b, "%s\n\n", i18n.Tf(lang, "notif.task_due.body", rem.Title, rem.RoomName, rem.DueDate))
 	if rem.Detail != "" {
-		fmt.Fprintf(&b, "Details:\n%s\n\n", rem.Detail)
+		fmt.Fprintf(&b, "%s\n%s\n\n", i18n.T(lang, "notif.task_due.details"), rem.Detail)
 	}
-	b.WriteString("Open Sinau to mark it done or update progress.\n\n— Sinau\n")
+	fmt.Fprintf(&b, "%s\n\n%s\n", i18n.T(lang, "notif.task_due.footer"), i18n.T(lang, "notif.task_due.signature"))
 	return b.String()
 }
 

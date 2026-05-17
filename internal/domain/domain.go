@@ -24,9 +24,10 @@ func ValidRoomMode(s string) bool {
 }
 
 type User struct {
-	ID    string
-	Name  string
-	Email string
+	ID       string
+	Name     string
+	Email    string
+	Language string
 }
 
 type Room struct {
@@ -257,15 +258,16 @@ type Stats struct {
 }
 
 type TaskReminder struct {
-	TaskID        string
-	Title         string
-	Detail        string
-	DueDate       string
-	RoomID        string
-	RoomName      string
-	AssigneeID    string
-	AssigneeName  string
-	AssigneeEmail string
+	TaskID           string
+	Title            string
+	Detail           string
+	DueDate          string
+	RoomID           string
+	RoomName         string
+	AssigneeID       string
+	AssigneeName     string
+	AssigneeEmail    string
+	AssigneeLanguage string
 }
 
 type RoomData struct {

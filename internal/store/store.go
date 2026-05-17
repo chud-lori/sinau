@@ -182,7 +182,39 @@ func (s *Store) Migrate() error {
 	if err := s.applyMigration5(); err != nil {
 		return err
 	}
-	return s.applyMigration6()
+	if err := s.applyMigration6(); err != nil {
+		return err
+	}
+	return s.applyMigration7()
+}
+
+func (s *Store) applyMigration7() error {
+	const version = 7
+	var exists int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 1 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	langExists, err := columnExistsTx(tx, "users", "language")
+	if err != nil {
+		return err
+	}
+	if !langExists {
+		if _, err := tx.Exec(`ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'en'`); err != nil {
+			return fmt.Errorf("migration %d: %w", version, err)
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`, version, auth.Now()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ensureGamificationSchema() error {
@@ -491,9 +523,9 @@ func (s *Store) DeleteSession(token string) error {
 func (s *Store) CurrentUser(token string) (*domain.User, error) {
 	var u domain.User
 	var expires string
-	err := s.db.QueryRow(`SELECT u.id, u.name, u.email, s.expires_at
+	err := s.db.QueryRow(`SELECT u.id, u.name, u.email, u.language, s.expires_at
 		FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.id_hash = ?`, auth.HashToken(token)).Scan(&u.ID, &u.Name, &u.Email, &expires)
+		WHERE s.id_hash = ?`, auth.HashToken(token)).Scan(&u.ID, &u.Name, &u.Email, &u.Language, &expires)
 	if err != nil {
 		return nil, err
 	}
@@ -502,6 +534,13 @@ func (s *Store) CurrentUser(token string) (*domain.User, error) {
 		return nil, errors.New("expired session")
 	}
 	return &u, nil
+}
+
+// SetUserLanguage persists the user's preferred UI language. Validation of
+// the language tag is left to the caller (i18n.IsValid).
+func (s *Store) SetUserLanguage(userID, language string) error {
+	_, err := s.db.Exec(`UPDATE users SET language = ? WHERE id = ?`, language, userID)
+	return err
 }
 
 func (s *Store) CSRF(token string) string {
@@ -1422,7 +1461,7 @@ func (s *Store) Invites(roomID string) ([]domain.Invite, error) {
 func (s *Store) DueTaskReminders(now time.Time, window time.Duration) ([]domain.TaskReminder, error) {
 	start := now.UTC().Format("2006-01-02")
 	end := now.UTC().Add(window).Format("2006-01-02")
-	rows, err := s.db.Query(`SELECT t.id, t.title, t.detail, t.due_date, r.id, r.name, u.id, u.name, u.email
+	rows, err := s.db.Query(`SELECT t.id, t.title, t.detail, t.due_date, r.id, r.name, u.id, u.name, u.email, u.language
 		FROM tasks t
 		JOIN rooms r ON r.id = t.room_id
 		JOIN users u ON u.id = t.assigned_to
@@ -1438,7 +1477,7 @@ func (s *Store) DueTaskReminders(now time.Time, window time.Duration) ([]domain.
 	var out []domain.TaskReminder
 	for rows.Next() {
 		var rem domain.TaskReminder
-		if err := rows.Scan(&rem.TaskID, &rem.Title, &rem.Detail, &rem.DueDate, &rem.RoomID, &rem.RoomName, &rem.AssigneeID, &rem.AssigneeName, &rem.AssigneeEmail); err != nil {
+		if err := rows.Scan(&rem.TaskID, &rem.Title, &rem.Detail, &rem.DueDate, &rem.RoomID, &rem.RoomName, &rem.AssigneeID, &rem.AssigneeName, &rem.AssigneeEmail, &rem.AssigneeLanguage); err != nil {
 			return nil, err
 		}
 		out = append(out, rem)

@@ -1,22 +1,23 @@
 {{define "layout_start"}}<!doctype html>
-<html lang="en">
+<html lang="{{.Lang}}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#176b52">
   <title>{{.Title}} - Sinau</title>
-  <meta name="description" content="Sinau — a private, mentor-led learning tracker. Run mentorship cohorts with weekly reports and tasks, or classrooms with assignments and review.">
+  <meta name="description" content="{{.T "site.meta.desc"}}">
   <meta name="robots" content="noindex,nofollow">
 
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Sinau">
   <meta property="og:title" content="{{.Title}} - Sinau">
-  <meta property="og:description" content="A private, mentor-led learning tracker. Mentorship cohorts with reports and tasks, or classrooms with assignments and review.">
+  <meta property="og:description" content="{{.T "site.og.desc"}}">
   <meta property="og:image" content="/static/img/landing-hero.png">
+  <meta property="og:locale" content="{{if eq (printf "%s" .Lang) "id"}}id_ID{{else}}en_US{{end}}">
 
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="{{.Title}} - Sinau">
-  <meta name="twitter:description" content="A private, mentor-led learning tracker. Mentorship cohorts with reports and tasks, or classrooms with assignments and review.">
+  <meta name="twitter:description" content="{{.T "site.og.desc"}}">
   <meta name="twitter:image" content="/static/img/landing-hero.png">
 
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
@@ -25,29 +26,29 @@
 </head>
 <body>
 <header class="topbar">
-  <a class="brand" href="/" aria-label="Sinau home">
+  <a class="brand" href="/" aria-label="{{.T "site.brand.aria_home"}}">
     <span class="brand-mark">S</span>
     <span>Sinau</span>
   </a>
-  {{if .User}}
   <nav>
-    <span class="user-chip">{{.User.Name}}</span>
-    {{if gt .UserPoints 0}}<span class="pill point-chip" title="lifetime points">{{.UserPoints}} pts</span>{{end}}
-    {{if .NotificationsEnabled}}<a href="/settings">Settings</a>{{end}}
-    <a href="/help">Help</a>
-    <form method="post" action="/logout">
-      <input type="hidden" name="csrf" value="{{.CSRF}}">
-      <button class="link" type="submit">Logout</button>
-    </form>
+    {{if .User}}
+      <span class="user-chip">{{.User.Name}}</span>
+      {{if gt .UserPoints 0}}<span class="pill point-chip" title="{{.T "nav.points.title"}}">{{.Tf "nav.points" .UserPoints}}</span>{{end}}
+      {{if .NotificationsEnabled}}<a href="/settings">{{.T "nav.settings"}}</a>{{end}}
+      <a href="/help">{{.T "nav.help"}}</a>
+      {{template "lang_picker" .}}
+      <form method="post" action="/logout">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <button class="link" type="submit">{{.T "nav.logout"}}</button>
+      </form>
+    {{else}}
+      <a href="/help">{{.T "nav.help"}}</a>
+      <a href="/login">{{.T "nav.login"}}</a>
+      <a href="/join">{{.T "nav.join"}}</a>
+      {{if .SetupNeeded}}<a class="nav-button" href="/setup">{{.T "nav.setup"}}</a>{{end}}
+      {{template "lang_picker" .}}
+    {{end}}
   </nav>
-  {{else}}
-  <nav>
-    <a href="/help">Help</a>
-    <a href="/login">Login</a>
-    <a href="/join">Join</a>
-    {{if .SetupNeeded}}<a class="nav-button" href="/setup">Set up</a>{{end}}
-  </nav>
-  {{end}}
 </header>
 <main class="shell">
 {{if .Error}}<p class="alert error">{{.Error}}</p>{{end}}
@@ -56,66 +57,72 @@
 
 {{define "layout_end"}}</main></body></html>{{end}}
 
+{{define "lang_picker"}}<form method="post" action="/lang" class="lang-picker" aria-label="{{.T "nav.language"}}">
+  {{if .User}}<input type="hidden" name="csrf" value="{{.CSRF}}">{{end}}
+  <input type="hidden" name="return_to" value="{{.RequestPath}}">
+  {{range .SupportedLangs}}{{if eq (printf "%s" .) (printf "%s" $.Lang)}}<span class="lang-current" aria-current="true">{{$.LangLabel .}}</span>{{else}}<button class="lang-switch" name="lang" value="{{.}}" type="submit">{{$.LangLabel .}}</button>{{end}}{{end}}
+</form>{{end}}
+
 {{define "landing"}}{{template "layout_start" .}}
 <section class="landing-hero">
   <div class="landing-content">
-    <p class="eyebrow">Private learning rooms</p>
+    <p class="eyebrow">{{.T "landing.eyebrow"}}</p>
     <h1>Sinau</h1>
-    <p class="landing-lede">Run small mentorship cohorts with weekly reports and tasks, or run a classroom with assignments and submission review — two room formats, one private workspace.</p>
+    <p class="landing-lede">{{.T "landing.lede"}}</p>
     <div class="landing-actions">
-      {{if .SetupNeeded}}<a class="button primary" href="/setup">Create first room</a>{{end}}
-      <a class="button secondary" href="/help">Read guide</a>
-      <a class="button secondary" href="/login">Login</a>
-      <a class="button secondary" href="/join">Join as learner</a>
+      {{if .SetupNeeded}}<a class="button primary" href="/setup">{{.T "landing.cta.create_first"}}</a>{{end}}
+      <a class="button secondary" href="/help">{{.T "landing.cta.guide"}}</a>
+      <a class="button secondary" href="/login">{{.T "landing.cta.login"}}</a>
+      <a class="button secondary" href="/join">{{.T "landing.cta.join_learner"}}</a>
     </div>
   </div>
   <div class="landing-visual">
-    <img src="/static/img/landing-hero.png" alt="Sinau mentor dashboard on a laptop">
+    <img src="/static/img/landing-hero.png" alt="{{.T "site.hero.alt"}}">
   </div>
   <div class="landing-dashboard" aria-hidden="true">
     <div class="mock-top">
       <span></span><span></span><span></span>
     </div>
     <div class="mock-grid">
-      <div class="mock-stat"><strong>4</strong><span>waiting feedback</span></div>
-      <div class="mock-stat"><strong>2</strong><span>blocked</span></div>
-      <div class="mock-stat"><strong>9</strong><span>open tasks</span></div>
+      <div class="mock-stat"><strong>4</strong><span>{{.T "landing.mock.waiting"}}</span></div>
+      <div class="mock-stat"><strong>2</strong><span>{{.T "landing.mock.blocked"}}</span></div>
+      <div class="mock-stat"><strong>9</strong><span>{{.T "landing.mock.open_tasks"}}</span></div>
     </div>
     <div class="mock-report">
       <span class="avatar"></span>
       <div>
-        <strong>Raka submitted progress</strong>
-        <p>Built auth middleware. Blocked on session expiry tests.</p>
+        <strong>{{.T "landing.mock.report1.title"}}</strong>
+        <p>{{.T "landing.mock.report1.body"}}</p>
       </div>
     </div>
     <div class="mock-report soft">
       <span class="avatar green"></span>
       <div>
-        <strong>Maya completed a task</strong>
-        <p>Finished SQLite migration exercise and shared notes.</p>
+        <strong>{{.T "landing.mock.report2.title"}}</strong>
+        <p>{{.T "landing.mock.report2.body"}}</p>
       </div>
     </div>
   </div>
 </section>
 <section class="landing-strip">
-  <div><strong>Invite-only</strong><span>Rooms stay private by default.</span></div>
-  <div><strong>Two formats</strong><span>Mentorship for cohorts. Classroom for assignments and review.</span></div>
-  <div><strong>No uploads</strong><span>Use Docs, Drive, PDFs, Colab, and repo URLs.</span></div>
+  <div><strong>{{.T "landing.strip.invite.title"}}</strong><span>{{.T "landing.strip.invite.desc"}}</span></div>
+  <div><strong>{{.T "landing.strip.formats.title"}}</strong><span>{{.T "landing.strip.formats.desc"}}</span></div>
+  <div><strong>{{.T "landing.strip.noupload.title"}}</strong><span>{{.T "landing.strip.noupload.desc"}}</span></div>
 </section>
 {{template "layout_end" .}}{{end}}
 
 {{define "setup"}}{{template "layout_start" .}}
 <section class="auth-card">
   <div class="auth-copy">
-    <p class="eyebrow">Private learning rooms</p>
-    <h1>Set Up Mentor Account</h1>
-    <p class="muted">Create the first mentor account. After setup, create a room and choose the workflow that fits it.</p>
+    <p class="eyebrow">{{.T "setup.eyebrow"}}</p>
+    <h1>{{.T "setup.title"}}</h1>
+    <p class="muted">{{.T "setup.lede"}}</p>
   </div>
   <form method="post" action="/setup" class="stack">
-    <label>Name <input name="name" required autocomplete="name"></label>
-    <label>Email <input name="email" type="email" required autocomplete="email"></label>
-    <label>Password <input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
-    <button type="submit">Create mentor account</button>
+    <label>{{.T "form.name"}} <input name="name" required autocomplete="name"></label>
+    <label>{{.T "form.email"}} <input name="email" type="email" required autocomplete="email"></label>
+    <label>{{.T "form.password"}} <input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
+    <button type="submit">{{.T "setup.submit"}}</button>
   </form>
 </section>
 {{template "layout_end" .}}{{end}}
@@ -123,39 +130,39 @@
 {{define "login"}}{{template "layout_start" .}}
 <section class="auth-card">
   <div class="auth-copy">
-    <p class="eyebrow">Progress tracking</p>
-    <h1>Login</h1>
-    <p class="muted">Open your learning room, review reports, and keep next actions visible.</p>
+    <p class="eyebrow">{{.T "login.eyebrow"}}</p>
+    <h1>{{.T "login.title"}}</h1>
+    <p class="muted">{{.T "login.lede"}}</p>
   </div>
-  {{if .SetupNeeded}}<p>No mentor exists yet. <a href="/setup">Create the first room</a>.</p>{{end}}
+  {{if .SetupNeeded}}<p>{{.T "login.no_mentor"}} <a href="/setup">{{.T "login.create_link"}}</a>.</p>{{end}}
   <form method="post" action="/login" class="stack">
-    <label>Email <input name="email" type="email" required autocomplete="email"></label>
-    <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
-    <button type="submit">Login</button>
+    <label>{{.T "form.email"}} <input name="email" type="email" required autocomplete="email"></label>
+    <label>{{.T "form.password"}} <input name="password" type="password" required autocomplete="current-password"></label>
+    <button type="submit">{{.T "login.submit"}}</button>
   </form>
-  <p class="muted">New learner? <a href="/join">Join with an invite code</a>.</p>
+  <p class="muted">{{.T "login.new_learner"}} <a href="/join">{{.T "login.join_link"}}</a>.</p>
 </section>
 {{template "layout_end" .}}{{end}}
 
 {{define "join"}}{{template "layout_start" .}}
 <section class="auth-card">
   <div class="auth-copy">
-    <p class="eyebrow">Invitation required</p>
-    <h1>Join Room</h1>
+    <p class="eyebrow">{{.T "join.eyebrow"}}</p>
+    <h1>{{.T "join.title"}}</h1>
     {{if .InvitePreview.Valid}}
-      <p class="feedback-note">You're about to create an account as a <strong>{{.InvitePreview.RoleLabel}}</strong> in <strong>{{.InvitePreview.RoomName}}</strong> ({{.InvitePreview.ModeLabel}} room).</p>
+      <p class="feedback-note">{{.T "join.preview.prefix"}}<strong>{{.RoleLabel .InvitePreview.RoomMode .InvitePreview.Role}}</strong>{{.T "join.preview.in"}}<strong>{{.InvitePreview.RoomName}}</strong>{{.Tf "join.preview.suffix" (.ModeLabel .InvitePreview.RoomMode)}}</p>
     {{else if .JoinCode}}
-      <p class="alert error">That invite isn't valid — it may be expired, already used, or mistyped.</p>
+      <p class="alert error">{{.T "join.invalid"}}</p>
     {{else}}
-      <p class="muted">Use the invite code your mentor sent you. We'll show what you're joining before you create the account.</p>
+      <p class="muted">{{.T "join.help"}}</p>
     {{end}}
   </div>
   <form method="post" action="/join" class="stack">
-    <label>Invite code <input name="code" value="{{.JoinCode}}" required></label>
-    <label>Name <input name="name" required autocomplete="name"></label>
-    <label>Email <input name="email" type="email" required autocomplete="email"></label>
-    <label>Password <input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
-    <button type="submit">Create account</button>
+    <label>{{.T "form.code"}} <input name="code" value="{{.JoinCode}}" required></label>
+    <label>{{.T "form.name"}} <input name="name" required autocomplete="name"></label>
+    <label>{{.T "form.email"}} <input name="email" type="email" required autocomplete="email"></label>
+    <label>{{.T "form.password"}} <input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
+    <button type="submit">{{.T "join.submit"}}</button>
   </form>
 </section>
 {{template "layout_end" .}}{{end}}
@@ -163,43 +170,43 @@
 {{define "mentor_home"}}{{template "layout_start" .}}
 <section class="dash-home-hero solo">
   <div>
-    <p class="eyebrow">Mentor command center</p>
-    <h1>Welcome back, {{.User.Name}}</h1>
-    <p class="muted">Start with blockers, overdue tasks, submissions awaiting review, and reports needing feedback.</p>
+    <p class="eyebrow">{{.T "mentor.eyebrow"}}</p>
+    <h1>{{.Tf "mentor.welcome" .User.Name}}</h1>
+    <p class="muted">{{.T "mentor.lede"}}</p>
   </div>
 </section>
 
 <section class="create-room-band">
   <div>
-    <p class="eyebrow">New room</p>
-    <h2>Create a room</h2>
-    <p class="muted">Use <strong>Mentorship</strong> for guided cohorts with reports, blockers, and tasks. Use <strong>Classroom</strong> for assignments and submission review.</p>
+    <p class="eyebrow">{{.T "mentor.create.eyebrow"}}</p>
+    <h2>{{.T "mentor.create.title"}}</h2>
+    <p class="muted">{{.T "mentor.create.lede"}}</p>
   </div>
   <form method="post" action="/rooms" class="create-room-form">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
-    <input name="name" required placeholder="e.g. Backend cohort">
-    <select name="mode" aria-label="Room format">
-      <option value="mentorship">Mentorship</option>
-      <option value="classroom">Classroom</option>
+    <input name="name" required placeholder="{{.T "mentor.create.name_placeholder"}}">
+    <select name="mode" aria-label="{{.T "mentor.create.mode_aria"}}">
+      <option value="mentorship">{{.T "mode.mentorship"}}</option>
+      <option value="classroom">{{.T "mode.classroom"}}</option>
     </select>
-    <button type="submit">Create room</button>
+    <button type="submit">{{.T "mentor.create.submit"}}</button>
   </form>
 </section>
 
 <section class="mentor-summary">
-  <div><span>Rooms</span><strong>{{.MentorDash.Summary.Rooms}}</strong></div>
-  <div><span>Learners</span><strong>{{.MentorDash.Summary.ActiveLearners}}</strong></div>
-  <div><span>Need feedback</span><strong>{{.MentorDash.Summary.WaitingFeedback}}</strong></div>
-  <div><span>Blockers</span><strong>{{.MentorDash.Summary.Blockers}}</strong></div>
-  <div><span>Overdue</span><strong>{{.MentorDash.Summary.OverdueTasks}}</strong></div>
+  <div><span>{{.T "mentor.summary.rooms"}}</span><strong>{{.MentorDash.Summary.Rooms}}</strong></div>
+  <div><span>{{.T "mentor.summary.learners"}}</span><strong>{{.MentorDash.Summary.ActiveLearners}}</strong></div>
+  <div><span>{{.T "mentor.summary.feedback"}}</span><strong>{{.MentorDash.Summary.WaitingFeedback}}</strong></div>
+  <div><span>{{.T "mentor.summary.blockers"}}</span><strong>{{.MentorDash.Summary.Blockers}}</strong></div>
+  <div><span>{{.T "mentor.summary.overdue"}}</span><strong>{{.MentorDash.Summary.OverdueTasks}}</strong></div>
 </section>
 
 <div class="home-grid">
   <section class="panel attention-home">
     <div class="section-head">
       <div>
-        <p class="eyebrow">Attention queue</p>
-        <h2>Needs action</h2>
+        <p class="eyebrow">{{.T "mentor.attention.eyebrow"}}</p>
+        <h2>{{.T "mentor.attention.title"}}</h2>
       </div>
     </div>
     {{range .MentorDash.AttentionItems}}
@@ -207,26 +214,26 @@
         <span class="attention-kind">{{.Kind}}</span>
         <div>
           <strong>{{.UserName}} · {{.RoomName}}</strong>
-          <p>{{.Title}}{{if .DueDate}} · due {{.DueDate}}{{end}}</p>
+          <p>{{.Title}}{{if .DueDate}} · {{$.T "mentor.attention.due"}} {{.DueDate}}{{end}}</p>
         </div>
       </a>
     {{else}}
-      <div class="empty-inline action-empty"><strong>No urgent work</strong><p class="muted">When learners are blocked or deadlines slip, they will appear here.</p></div>
+      <div class="empty-inline action-empty"><strong>{{.T "mentor.attention.empty.title"}}</strong><p class="muted">{{.T "mentor.attention.empty.body"}}</p></div>
     {{end}}
   </section>
 
   <section class="panel">
     <div class="section-head">
       <div>
-        <p class="eyebrow">Rooms</p>
-        <h2>Cohorts</h2>
+        <p class="eyebrow">{{.T "mentor.rooms.eyebrow"}}</p>
+        <h2>{{.T "mentor.rooms.title"}}</h2>
       </div>
     </div>
       <div class="mini-room-list">
       {{range .MentorDash.Rooms}}
-        <a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{.MyRoleLabel}} · {{.ModeLabel}}</span></a>
+        <a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{$.RoleLabel .Mode .Role}} · {{$.ModeLabel .Mode}}</span></a>
       {{else}}
-        <div class="empty-inline"><strong>No rooms</strong><p class="muted">Create your first cohort room.</p></div>
+        <div class="empty-inline"><strong>{{$.T "mentor.rooms.empty.title"}}</strong><p class="muted">{{$.T "mentor.rooms.empty.body"}}</p></div>
       {{end}}
     </div>
   </section>
@@ -235,22 +242,22 @@
 <section class="panel learner-progress-panel">
   <div class="section-head">
     <div>
-      <p class="eyebrow">Learner progress</p>
-      <h2>People you guide</h2>
+      <p class="eyebrow">{{.T "mentor.learners.eyebrow"}}</p>
+      <h2>{{.T "mentor.learners.title"}}</h2>
     </div>
   </div>
   <div class="progress-table">
-    <div class="progress-head"><span>Learner</span><span>Room</span><span>Last report</span><span>Tasks</span><span>Status</span></div>
+    <div class="progress-head"><span>{{.T "mentor.learners.col.learner"}}</span><span>{{.T "mentor.learners.col.room"}}</span><span>{{.T "mentor.learners.col.last"}}</span><span>{{.T "mentor.learners.col.tasks"}}</span><span>{{.T "mentor.learners.col.status"}}</span></div>
     {{range .MentorDash.Learners}}
       <a class="progress-row" href="/rooms/{{.RoomID}}">
-        <span><strong>{{.Name}}</strong><small>{{.ReportsThisWeek}} reports this week</small></span>
+        <span><strong>{{.Name}}</strong><small>{{$.Tf "mentor.learners.reports_week" .ReportsThisWeek}}</small></span>
         <span>{{.RoomName}}</span>
-        <span>{{if .LastReport}}{{.LastReport}}{{else}}no report{{end}}</span>
-        <span>{{.OpenTasks}} open · {{.OverdueTasks}} overdue</span>
+        <span>{{if .LastReport}}{{.LastReport}}{{else}}{{$.T "mentor.learners.no_report"}}{{end}}</span>
+        <span>{{$.Tf "mentor.learners.tasks_state" .OpenTasks .OverdueTasks}}</span>
         <span class="status-pill {{.Status}}">{{.Status}}</span>
       </a>
     {{else}}
-      <div class="empty-inline"><strong>No learners yet</strong><p class="muted">Create an invite from a room and learners will show up here.</p></div>
+      <div class="empty-inline"><strong>{{.T "mentor.learners.empty.title"}}</strong><p class="muted">{{.T "mentor.learners.empty.body"}}</p></div>
     {{end}}
   </div>
 </section>
@@ -259,51 +266,51 @@
 {{define "learner_home"}}{{template "layout_start" .}}
 <section class="dash-home-hero learner">
   <div>
-    <p class="eyebrow">My learning dashboard</p>
-    <h1>Keep momentum visible</h1>
-    <p class="muted">Track your assigned work, deadlines, recent reports, and feedback from mentors.</p>
+    <p class="eyebrow">{{.T "learner.eyebrow"}}</p>
+    <h1>{{.T "learner.title"}}</h1>
+    <p class="muted">{{.T "learner.lede"}}</p>
   </div>
 </section>
 
 <section class="mentor-summary learner-summary">
-  <div><span>Rooms</span><strong>{{.LearnerDash.Summary.Rooms}}</strong></div>
-  <div><span>Open tasks</span><strong>{{.LearnerDash.Summary.OpenTasks}}</strong></div>
-  <div><span>Due soon</span><strong>{{.LearnerDash.Summary.DueSoonTasks}}</strong></div>
-  <div><span>Overdue</span><strong>{{.LearnerDash.Summary.OverdueTasks}}</strong></div>
-  <div><span>Reports/week</span><strong>{{.LearnerDash.Summary.ReportsThisWeek}}</strong></div>
+  <div><span>{{.T "learner.summary.rooms"}}</span><strong>{{.LearnerDash.Summary.Rooms}}</strong></div>
+  <div><span>{{.T "learner.summary.open"}}</span><strong>{{.LearnerDash.Summary.OpenTasks}}</strong></div>
+  <div><span>{{.T "learner.summary.due"}}</span><strong>{{.LearnerDash.Summary.DueSoonTasks}}</strong></div>
+  <div><span>{{.T "learner.summary.overdue"}}</span><strong>{{.LearnerDash.Summary.OverdueTasks}}</strong></div>
+  <div><span>{{.T "learner.summary.reports"}}</span><strong>{{.LearnerDash.Summary.ReportsThisWeek}}</strong></div>
 </section>
 
 <div class="home-grid">
   <section class="panel">
-    <div class="section-head"><div><p class="eyebrow">Next actions</p><h2>My tasks</h2></div></div>
+    <div class="section-head"><div><p class="eyebrow">{{.T "learner.tasks.eyebrow"}}</p><h2>{{.T "learner.tasks.title"}}</h2></div></div>
     {{range .LearnerDash.Tasks}}
       <article class="task-card status-border-{{.Status}}">
         <div class="item-head"><strong>{{.Title}}</strong><span class="status {{.Status}}">{{.Status}}</span></div>
         {{if .Detail}}<p>{{.Detail}}</p>{{end}}
-        {{if .DueDate}}<p><span class="due-chip {{.DueState}}">Due {{.DueDate}}</span></p>{{end}}
+        {{if .DueDate}}<p><span class="due-chip {{.DueState}}">{{$.T "room.due_chip"}} {{.DueDate}}</span></p>{{end}}
       </article>
     {{else}}
-      <div class="empty-inline action-empty"><strong>No open tasks</strong><p class="muted">Assigned mentor tasks will appear here.</p></div>
+      <div class="empty-inline action-empty"><strong>{{.T "learner.tasks.empty.title"}}</strong><p class="muted">{{.T "learner.tasks.empty.body"}}</p></div>
     {{end}}
   </section>
   <section class="panel">
-    <div class="section-head"><div><p class="eyebrow">Rooms</p><h2>My rooms</h2></div></div>
+    <div class="section-head"><div><p class="eyebrow">{{.T "learner.rooms.eyebrow"}}</p><h2>{{.T "learner.rooms.title"}}</h2></div></div>
     <div class="mini-room-list">
-      {{range .LearnerDash.Rooms}}<a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{.MyRoleLabel}} · {{.ModeLabel}}</span></a>{{else}}<div class="empty-inline"><strong>No rooms</strong><p class="muted">Join with an invite code from your mentor.</p></div>{{end}}
+      {{range .LearnerDash.Rooms}}<a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{$.RoleLabel .Mode .Role}} · {{$.ModeLabel .Mode}}</span></a>{{else}}<div class="empty-inline"><strong>{{$.T "learner.rooms.empty.title"}}</strong><p class="muted">{{$.T "learner.rooms.empty.body"}}</p></div>{{end}}
     </div>
   </section>
 </div>
 
 <section class="panel">
-  <div class="section-head"><div><p class="eyebrow">Recent progress</p><h2>My reports</h2></div></div>
+  <div class="section-head"><div><p class="eyebrow">{{.T "learner.reports.eyebrow"}}</p><h2>{{.T "learner.reports.title"}}</h2></div></div>
   {{range .LearnerDash.RecentReports}}
     <article class="report-card {{if .Blocker}}has-blocker{{end}}">
-      <div class="item-head"><div><strong>{{.Author}}</strong><p class="muted">{{.CreatedAt}}</p></div><span class="comment-link">{{.Comments}} comments</span></div>
-      {{if .Blocker}}<p class="blocker">Blocked: {{.Blocker}}</p>{{end}}
+      <div class="item-head"><div><strong>{{.Author}}</strong><p class="muted">{{.CreatedAt}}</p></div><span class="comment-link">{{$.Tf "room.comments" .Comments}}</span></div>
+      {{if .Blocker}}<p class="blocker">{{$.Tf "room.blocker.label" .Blocker}}</p>{{end}}
       <p>{{.Learned}}</p>
     </article>
   {{else}}
-    <div class="empty-inline"><strong>No reports yet</strong><p class="muted">Submit a progress report inside one of your rooms.</p></div>
+    <div class="empty-inline"><strong>{{.T "learner.reports.empty.title"}}</strong><p class="muted">{{.T "learner.reports.empty.body"}}</p></div>
   {{end}}
 </section>
 {{template "layout_end" .}}{{end}}
@@ -311,53 +318,53 @@
 {{define "room"}}{{template "layout_start" .}}
 <div class="dashboard-hero">
   <div>
-    <a class="back-link" href="/">All rooms</a>
+    <a class="back-link" href="/">{{.T "room.back.all"}}</a>
     <h1>{{.Room.Name}}</h1>
-    <p class="muted">{{if and (eq .Room.Role "mentor") (eq .Room.Mode "classroom")}}Publish assignments, review submissions, and keep the class on track.{{else if eq .Room.Role "mentor"}}Review reports, unblock learners, and assign the next concrete task.{{else if eq .Room.Mode "classroom"}}Submit assignments, watch for feedback, and resubmit when your teacher asks for revisions.{{else}}Submit progress, track assigned tasks, and keep mentor feedback in one place.{{end}}</p>
+    <p class="muted">{{if and (eq .Room.Role "mentor") (eq .Room.Mode "classroom")}}{{.T "room.lede.mentor.classroom"}}{{else if eq .Room.Role "mentor"}}{{.T "room.lede.mentor.mentorship"}}{{else if eq .Room.Mode "classroom"}}{{.T "room.lede.learner.classroom"}}{{else}}{{.T "room.lede.learner.mentorship"}}{{end}}</p>
   </div>
   <div class="hero-actions">
-    <span class="pill role-pill">{{.Room.MyRoleLabel}}</span>
-    <span class="pill mode-pill">{{.Room.ModeLabel}}</span>
-    {{if eq .Room.Role "mentor"}}<a class="button secondary" href="#invite">Invite people</a>{{end}}
+    <span class="pill role-pill">{{.RoleLabel .Room.Mode .Room.Role}}</span>
+    <span class="pill mode-pill">{{.ModeLabel .Room.Mode}}</span>
+    {{if eq .Room.Role "mentor"}}<a class="button secondary" href="#invite">{{.T "room.invite.cta"}}</a>{{end}}
   </div>
 </div>
 
 {{if and (eq .Room.Role "mentor") (eq .Room.Mode "classroom")}}
 <section class="stats">
-  <div class="stat-card neutral"><span>Students</span><strong>{{len .RoomLearners}}</strong></div>
-  <div class="stat-card good"><span>Assignments</span><strong>{{len .Assignments}}</strong></div>
-  <div class="stat-card warn"><span>Submissions</span><strong>{{len .Submissions}}</strong></div>
-  <div class="stat-card danger"><span>Need review</span><strong>{{.PendingReviews}}</strong></div>
+  <div class="stat-card neutral"><span>{{.T "room.classroom.stats.students"}}</span><strong>{{len .RoomLearners}}</strong></div>
+  <div class="stat-card good"><span>{{.T "room.classroom.stats.assignments"}}</span><strong>{{len .Assignments}}</strong></div>
+  <div class="stat-card warn"><span>{{.T "room.classroom.stats.submissions"}}</span><strong>{{len .Submissions}}</strong></div>
+  <div class="stat-card danger"><span>{{.T "room.classroom.stats.need_review"}}</span><strong>{{.PendingReviews}}</strong></div>
 </section>
 
 <section class="priority-panel">
   <div>
-    <p class="eyebrow">Teacher queue</p>
-    <h2>Publish work, review submissions, and keep the class moving</h2>
+    <p class="eyebrow">{{.T "room.classroom.queue.eyebrow"}}</p>
+    <h2>{{.T "room.classroom.queue.title"}}</h2>
   </div>
   <div class="priority-grid">
-    <a href="#assignments"><strong>{{len .Assignments}}</strong><span>assignments published</span></a>
-    <a href="#submissions"><strong>{{len .Submissions}}</strong><span>submissions received</span></a>
-    <a href="#invite"><strong>{{len .RoomLearners}}</strong><span>students enrolled</span></a>
+    <a href="#assignments"><strong>{{len .Assignments}}</strong><span>{{.T "room.classroom.queue.published"}}</span></a>
+    <a href="#submissions"><strong>{{len .Submissions}}</strong><span>{{.T "room.classroom.queue.received"}}</span></a>
+    <a href="#invite"><strong>{{len .RoomLearners}}</strong><span>{{.T "room.classroom.queue.enrolled"}}</span></a>
   </div>
 </section>
 {{else if eq .Room.Role "mentor"}}
 <section class="stats">
-  <div class="stat-card danger"><span>Blocked reports</span><strong>{{.Stats.BlockedReports}}</strong></div>
-  <div class="stat-card warn"><span>Waiting feedback</span><strong>{{.Stats.WaitingReports}}</strong></div>
-  <div class="stat-card neutral"><span>Not checked in</span><strong>{{.Stats.InactiveLearners}}</strong></div>
-  <div class="stat-card good"><span>Open tasks</span><strong>{{.Stats.OpenTasks}}</strong></div>
+  <div class="stat-card danger"><span>{{.T "room.mentor.stats.blocked"}}</span><strong>{{.Stats.BlockedReports}}</strong></div>
+  <div class="stat-card warn"><span>{{.T "room.mentor.stats.waiting"}}</span><strong>{{.Stats.WaitingReports}}</strong></div>
+  <div class="stat-card neutral"><span>{{.T "room.mentor.stats.inactive"}}</span><strong>{{.Stats.InactiveLearners}}</strong></div>
+  <div class="stat-card good"><span>{{.T "room.mentor.stats.open"}}</span><strong>{{.Stats.OpenTasks}}</strong></div>
 </section>
 
 <section class="priority-panel">
   <div>
-    <p class="eyebrow">Mentor queue</p>
-    <h2>Start with the highest leverage work</h2>
+    <p class="eyebrow">{{.T "room.mentor.queue.eyebrow"}}</p>
+    <h2>{{.T "room.mentor.queue.title"}}</h2>
   </div>
   <div class="priority-grid">
-    <a href="#reports"><strong>{{.Stats.BlockedReports}}</strong><span>blockers to inspect</span></a>
-    <a href="#reports"><strong>{{.Stats.WaitingReports}}</strong><span>reports to review</span></a>
-    <a href="#tasks"><strong>{{.Stats.OverdueTasks}}</strong><span>overdue tasks</span></a>
+    <a href="#reports"><strong>{{.Stats.BlockedReports}}</strong><span>{{.T "room.mentor.queue.blockers"}}</span></a>
+    <a href="#reports"><strong>{{.Stats.WaitingReports}}</strong><span>{{.T "room.mentor.queue.reports"}}</span></a>
+    <a href="#tasks"><strong>{{.Stats.OverdueTasks}}</strong><span>{{.T "room.mentor.queue.overdue"}}</span></a>
   </div>
 </section>
 {{end}}
@@ -368,8 +375,8 @@
   <section class="panel primary-panel classroom-panel">
     <div class="section-head">
       <div>
-        <p class="eyebrow">Assignments</p>
-        <h2>Submit Classwork</h2>
+        <p class="eyebrow">{{.T "room.classroom.submit.eyebrow"}}</p>
+        <h2>{{.T "room.classroom.submit.title"}}</h2>
       </div>
     </div>
     {{range .Assignments}}
@@ -377,31 +384,31 @@
         <div class="item-head">
           <div>
             <strong>{{.Title}}</strong>
-            <p class="muted">Due {{.DueDate}}</p>
+            <p class="muted">{{$.Tf "room.due" .DueDate}}</p>
           </div>
-          {{if .MySubmissionStatus}}<span class="status {{.MySubmissionStatus}}">{{.MySubmissionStatus}}</span>{{else}}<span class="status todo">not submitted</span>{{end}}
+          {{if .MySubmissionStatus}}<span class="status {{.MySubmissionStatus}}">{{.MySubmissionStatus}}</span>{{else}}<span class="status todo">{{$.T "room.classroom.submit.status_none"}}</span>{{end}}
         </div>
         <p>{{.Instructions}}</p>
         <div class="report-actions">
-          {{if .ResourceURL}}<a href="{{.ResourceURL}}" rel="noreferrer" target="_blank">Open resource</a>{{end}}
-          {{if .MySubmissionURL}}<a href="{{.MySubmissionURL}}" rel="noreferrer" target="_blank">Open submission</a>{{end}}
+          {{if .ResourceURL}}<a href="{{.ResourceURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_resource"}}</a>{{end}}
+          {{if .MySubmissionURL}}<a href="{{.MySubmissionURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_submission"}}</a>{{end}}
         </div>
-        {{if .MyFeedback}}<p class="feedback-note"><strong>Teacher feedback:</strong> {{.MyFeedback}}{{if .MyScore}} · Score {{.MyScore}}{{end}}</p>{{end}}
+        {{if .MyFeedback}}<p class="feedback-note"><strong>{{$.T "room.classroom.submit.feedback"}}</strong> {{.MyFeedback}}{{if .MyScore}} · {{$.Tf "room.classroom.submit.score" .MyScore}}{{end}}</p>{{end}}
         <form method="post" action="/rooms/{{$.Room.ID}}/assignments/{{.ID}}/submissions" class="stack submission-form">
           <input type="hidden" name="csrf" value="{{$.CSRF}}">
-          <label>Submission link <input name="link_url" type="url" required placeholder="https://docs.google.com/..."></label>
-          <label>Note <textarea name="note" placeholder="What should your teacher look at?"></textarea></label>
-          <button type="submit">{{if .MySubmissionStatus}}Update submission{{else}}Submit assignment{{end}}</button>
+          <label>{{$.T "form.submission_link"}} <input name="link_url" type="url" required placeholder="{{$.T "room.classroom.submit.placeholder.link"}}"></label>
+          <label>{{$.T "form.note"}} <textarea name="note" placeholder="{{$.T "room.classroom.submit.placeholder.note"}}"></textarea></label>
+          <button type="submit">{{if .MySubmissionStatus}}{{$.T "room.classroom.submit.button.update"}}{{else}}{{$.T "room.classroom.submit.button.submit"}}{{end}}</button>
         </form>
       </article>
     {{else}}
-      <div class="empty-inline action-empty"><strong>No assignments yet</strong><p class="muted">Class assignments from your teacher will appear here.</p></div>
+      <div class="empty-inline action-empty"><strong>{{.T "room.classroom.submit.empty.title"}}</strong><p class="muted">{{.T "room.classroom.submit.empty.body"}}</p></div>
     {{end}}
   </section>
   <section class="panel" id="submissions">
-    <div class="section-head"><div><p class="eyebrow">Classroom</p><h2>Members</h2></div></div>
+    <div class="section-head"><div><p class="eyebrow">{{.T "room.classroom.members.eyebrow"}}</p><h2>{{.T "room.classroom.members.title"}}</h2></div></div>
     <div class="mini-room-list">
-      {{range .Members}}<div class="member-pill"><strong>{{.Name}}</strong><span>{{$.Room.RoleLabel .Role}}</span></div>{{end}}
+      {{range .Members}}<div class="member-pill"><strong>{{.Name}}</strong><span>{{$.RoleLabel $.Room.Mode .Role}}</span></div>{{end}}
     </div>
   </section>
 </div>
@@ -410,21 +417,21 @@
   <section class="panel primary-panel classroom-panel">
     <div class="section-head">
       <div>
-        <p class="eyebrow">Classwork</p>
-        <h2>Create Assignment</h2>
+        <p class="eyebrow">{{.T "room.classroom.publish.eyebrow"}}</p>
+        <h2>{{.T "room.classroom.publish.title"}}</h2>
       </div>
     </div>
     <form method="post" action="/rooms/{{.Room.ID}}/assignments" class="stack">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
-      <label>Title <input name="title" required placeholder="Week 1 SQL exercise"></label>
-      <label>Instructions <textarea name="instructions" required placeholder="Describe the expected work and submission criteria"></textarea></label>
-      <label>Resource link <input name="resource_url" type="url" placeholder="https://docs.google.com/..."></label>
-      <label>Deadline <input name="due_date" type="date" required></label>
-      <button type="submit">Publish assignment</button>
+      <label>{{.T "form.title"}} <input name="title" required placeholder="{{.T "room.classroom.publish.placeholder.title"}}"></label>
+      <label>{{.T "form.instructions"}} <textarea name="instructions" required placeholder="{{.T "room.classroom.publish.placeholder.instructions"}}"></textarea></label>
+      <label>{{.T "form.resource_link"}} <input name="resource_url" type="url" placeholder="{{.T "room.classroom.submit.placeholder.link"}}"></label>
+      <label>{{.T "form.deadline"}} <input name="due_date" type="date" required></label>
+      <button type="submit">{{.T "room.classroom.publish.button"}}</button>
     </form>
   </section>
   <section class="panel">
-    <div class="section-head"><div><p class="eyebrow">Submission queue</p><h2>Review work</h2></div></div>
+    <div class="section-head"><div><p class="eyebrow">{{.T "room.classroom.queue.eyebrow.submissions"}}</p><h2>{{.T "room.classroom.queue.title.review"}}</h2></div></div>
     {{range .Submissions}}
       <article class="submission-card">
         <div class="item-head">
@@ -432,46 +439,46 @@
           <span class="status {{.Status}}">{{.Status}}</span>
         </div>
         {{if .Note}}<p>{{.Note}}</p>{{end}}
-        <p class="report-actions"><a href="{{.LinkURL}}" rel="noreferrer" target="_blank">Open submission</a></p>
+        <p class="report-actions"><a href="{{.LinkURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_submission"}}</a></p>
         {{if eq .Status "submitted"}}
           <form method="post" action="/rooms/{{$.Room.ID}}/submissions/{{.ID}}/review" class="review-form">
             <input type="hidden" name="csrf" value="{{$.CSRF}}">
-            <select name="status" aria-label="Review status">
-              <option value="reviewed">reviewed</option>
-              <option value="revise">needs revision</option>
+            <select name="status" aria-label="{{$.T "room.classroom.review.aria"}}">
+              <option value="reviewed">{{$.T "room.classroom.review.status.reviewed"}}</option>
+              <option value="revise">{{$.T "room.classroom.review.status.revise"}}</option>
             </select>
-            <input name="score" type="number" inputmode="numeric" min="0" max="100" placeholder="0-100">
-            <textarea name="feedback" placeholder="Feedback"></textarea>
-            <button type="submit">Save review</button>
+            <input name="score" type="number" inputmode="numeric" min="0" max="100" placeholder="{{$.T "room.classroom.review.score_placeholder"}}">
+            <textarea name="feedback" placeholder="{{$.T "room.classroom.review.feedback_placeholder"}}"></textarea>
+            <button type="submit">{{$.T "room.classroom.review.submit"}}</button>
           </form>
         {{else}}
           <p class="feedback-note">
-            <strong>Reviewed{{if .Score}} · {{.Score}}{{end}}{{if .ReviewedAt}} · {{.ReviewedAt}}{{end}}</strong>
+            <strong>{{$.T "room.classroom.review.reviewed"}}{{if .Score}} · {{.Score}}{{end}}{{if .ReviewedAt}} · {{.ReviewedAt}}{{end}}</strong>
             {{if .Feedback}}<br>{{.Feedback}}{{end}}
-            {{if eq .Status "revise"}}<br><em class="muted">Waiting for the student to resubmit.</em>{{end}}
+            {{if eq .Status "revise"}}<br><em class="muted">{{$.T "room.classroom.review.waiting_resubmit"}}</em>{{end}}
           </p>
         {{end}}
       </article>
     {{else}}
-      <div class="empty-inline action-empty"><strong>No submissions yet</strong><p class="muted">Student submissions will appear here once your class starts handing work in.</p></div>
+      <div class="empty-inline action-empty"><strong>{{.T "room.classroom.review.empty.title"}}</strong><p class="muted">{{.T "room.classroom.review.empty.body"}}</p></div>
     {{end}}
   </section>
 </div>
 
 <section class="panel" id="assignments">
-  <div class="section-head"><div><p class="eyebrow">Assignments</p><h2>Published work</h2></div></div>
+  <div class="section-head"><div><p class="eyebrow">{{.T "room.classroom.published.eyebrow"}}</p><h2>{{.T "room.classroom.published.title"}}</h2></div></div>
   <div class="assignment-list">
     {{range .Assignments}}
       <article class="assignment-card compact-card">
         <div class="item-head">
-          <div><strong>{{.Title}}</strong><p class="muted">Due {{.DueDate}}</p></div>
-          <span class="pill">{{.Submitted}} / {{.TotalLearners}} submitted</span>
+          <div><strong>{{.Title}}</strong><p class="muted">{{$.Tf "room.due" .DueDate}}</p></div>
+          <span class="pill">{{$.Tf "room.classroom.published.fraction" .Submitted .TotalLearners}}</span>
         </div>
         <p>{{.Instructions}}</p>
-        {{if .ResourceURL}}<p class="report-actions"><a href="{{.ResourceURL}}" rel="noreferrer" target="_blank">Open resource</a></p>{{end}}
+        {{if .ResourceURL}}<p class="report-actions"><a href="{{.ResourceURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_resource"}}</a></p>{{end}}
       </article>
     {{else}}
-      <div class="empty-inline"><strong>No assignments yet</strong><p class="muted">Publish the first assignment when the class is ready.</p></div>
+      <div class="empty-inline"><strong>{{.T "room.classroom.published.empty.title"}}</strong><p class="muted">{{.T "room.classroom.published.empty.body"}}</p></div>
     {{end}}
   </div>
 </section>
@@ -480,17 +487,17 @@
   <section class="panel" id="invite">
     <div class="section-head">
       <div>
-        <p class="eyebrow">Access</p>
-        <h2>Invite</h2>
+        <p class="eyebrow">{{.T "room.invite.eyebrow"}}</p>
+        <h2>{{.T "room.invite.title"}}</h2>
       </div>
     </div>
     <form hx-post="/rooms/{{.Room.ID}}/invites" hx-target="#invite-result" method="post" class="inline">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <select name="role">
-        <option value="learner">student</option>
-        <option value="mentor">teacher</option>
+        <option value="learner">{{.T "room.invite.option.student"}}</option>
+        <option value="mentor">{{.T "room.invite.option.teacher"}}</option>
       </select>
-      <button type="submit">Create invite</button>
+      <button type="submit">{{.T "room.invite.submit"}}</button>
     </form>
     <div id="invite-result"></div>
   </section>
@@ -498,19 +505,19 @@
   <section class="panel" id="members">
     <div class="section-head">
       <div>
-        <p class="eyebrow">People</p>
-        <h2>Class roster</h2>
+        <p class="eyebrow">{{.T "room.members.eyebrow"}}</p>
+        <h2>{{.T "room.members.title.class"}}</h2>
       </div>
     </div>
     <div class="member-list">
-      <div class="table-head"><span>Name</span><span>Role</span><span>Email</span><span>Open work</span></div>
+      <div class="table-head"><span>{{.T "room.members.col.name"}}</span><span>{{.T "room.members.col.role"}}</span><span>{{.T "room.members.col.email"}}</span><span>{{.T "room.members.col.open"}}</span></div>
       {{range .Members}}
       <div class="member-row">
         <span class="member-avatar">{{printf "%.1s" .Name}}</span>
         <strong>{{.Name}}</strong>
-        <span class="pill">{{$.Room.RoleLabel .Role}}</span>
+        <span class="pill">{{$.RoleLabel $.Room.Mode .Role}}</span>
         <span>{{.Email}}</span>
-        <span>{{.OpenTasks}} open</span>
+        <span>{{$.Tf "room.members.open" .OpenTasks}}</span>
       </div>
       {{end}}
     </div>
@@ -524,26 +531,26 @@
   <section class="panel primary-panel checkin-panel">
     <div class="section-head">
       <div>
-        <p class="eyebrow">Check-in</p>
-        <h2>Submit Progress</h2>
+        <p class="eyebrow">{{.T "room.checkin.eyebrow"}}</p>
+        <h2>{{.T "room.checkin.title"}}</h2>
       </div>
     </div>
     <form method="post" action="/rooms/{{.Room.ID}}/reports" class="stack">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
-      <label>Learned <textarea name="learned" required placeholder="Concepts, docs, videos, or notes you worked through"></textarea></label>
-      <label>Practiced <textarea name="practiced" required placeholder="Code, exercises, experiments, or small deliverables"></textarea></label>
-      <label>Blocker <textarea name="blocker" placeholder="Leave empty when nothing needs mentor attention"></textarea></label>
-      <label>Next plan <textarea name="next_plan" required placeholder="The next concrete thing you will do"></textarea></label>
-      <label>Resource link <input name="link_url" type="url" placeholder="https://docs.google.com/..."></label>
-      <button type="submit">Submit progress</button>
+      <label>{{.T "form.learned"}} <textarea name="learned" required placeholder="{{.T "room.checkin.placeholder.learned"}}"></textarea></label>
+      <label>{{.T "form.practiced"}} <textarea name="practiced" required placeholder="{{.T "room.checkin.placeholder.practiced"}}"></textarea></label>
+      <label>{{.T "form.blocker"}} <textarea name="blocker" placeholder="{{.T "room.checkin.placeholder.blocker"}}"></textarea></label>
+      <label>{{.T "form.next_plan"}} <textarea name="next_plan" required placeholder="{{.T "room.checkin.placeholder.next"}}"></textarea></label>
+      <label>{{.T "form.resource_link"}} <input name="link_url" type="url" placeholder="{{.T "room.checkin.placeholder.link"}}"></label>
+      <button type="submit">{{.T "room.checkin.submit"}}</button>
     </form>
   </section>
 
   <section class="panel task-panel" id="tasks">
     <div class="section-head">
       <div>
-        <p class="eyebrow">Next actions</p>
-        <h2>Tasks</h2>
+        <p class="eyebrow">{{.T "room.tasks.eyebrow"}}</p>
+        <h2>{{.T "room.tasks.title"}}</h2>
       </div>
     </div>
     {{range .Tasks}}
@@ -553,25 +560,25 @@
           <span class="status {{.Status}}">{{.Status}}</span>
         </div>
         {{if .Detail}}<p>{{.Detail}}</p>{{end}}
-        <p class="muted">Assigned to {{.Assignee}}</p>
-        {{if .DueDate}}<p><span class="due-chip {{.DueState}}">Due {{.DueDate}}</span></p>{{end}}
+        <p class="muted">{{$.Tf "room.tasks.assigned_to" .Assignee}}</p>
+        {{if .DueDate}}<p><span class="due-chip {{.DueState}}">{{$.T "room.due_chip"}} {{.DueDate}}</span></p>{{end}}
         {{if .ReviewedAt}}
-          <p><span class="pill point-chip">Reviewed · {{.PointsAwarded}} / 5</span></p>
+          <p><span class="pill point-chip">{{$.Tf "room.tasks.reviewed" .PointsAwarded}}</span></p>
         {{else if eq .Status "done"}}
-          <p class="muted">Awaiting mentor review.</p>
+          <p class="muted">{{$.T "room.tasks.awaiting"}}</p>
         {{else}}
           <form class="task-update" method="post" action="/rooms/{{$.Room.ID}}/tasks/{{.ID}}/status">
             <input type="hidden" name="csrf" value="{{$.CSRF}}">
-            <select name="status" aria-label="Task status">
-              <option value="todo" {{if eq .Status "todo"}}selected{{end}}>todo</option>
-              <option value="doing" {{if eq .Status "doing"}}selected{{end}}>doing</option>
-              <option value="done" {{if eq .Status "done"}}selected{{end}}>done</option>
+            <select name="status" aria-label="{{$.T "room.tasks.status_aria"}}">
+              <option value="todo" {{if eq .Status "todo"}}selected{{end}}>{{$.T "room.tasks.status.todo"}}</option>
+              <option value="doing" {{if eq .Status "doing"}}selected{{end}}>{{$.T "room.tasks.status.doing"}}</option>
+              <option value="done" {{if eq .Status "done"}}selected{{end}}>{{$.T "room.tasks.status.done"}}</option>
             </select>
-            <button type="submit">Update</button>
+            <button type="submit">{{$.T "room.tasks.update"}}</button>
           </form>
         {{end}}
       </article>
-    {{else}}<div class="empty-inline action-empty"><strong>No tasks yet for you</strong><p class="muted">Your mentor will assign tasks here. Tasks become reviewable once you mark them <em>done</em>.</p></div>{{end}}
+    {{else}}<div class="empty-inline action-empty"><strong>{{.T "room.tasks.empty.learner.title"}}</strong><p class="muted">{{.T "room.tasks.empty.learner.body"}}</p></div>{{end}}
   </section>
 </div>
 {{else}}
@@ -579,8 +586,8 @@
   <section class="panel attention-home" id="reports">
     <div class="section-head">
       <div>
-        <p class="eyebrow">Review queue</p>
-        <h2>Latest learner reports</h2>
+        <p class="eyebrow">{{.T "room.reports.eyebrow"}}</p>
+        <h2>{{.T "room.reports.title.mentor"}}</h2>
       </div>
     </div>
     {{range .Reports}}
@@ -590,25 +597,25 @@
             <strong>{{.Author}}</strong>
             <p class="muted">{{.CreatedAt}}</p>
           </div>
-          <a class="comment-link" href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{.Comments}} comments</a>
+          <a class="comment-link" href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.Tf "room.comments" .Comments}}</a>
         </div>
-        {{if .Blocker}}<p class="blocker">Blocked: {{.Blocker}}</p>{{end}}
+        {{if .Blocker}}<p class="blocker">{{$.Tf "room.blocker.label" .Blocker}}</p>{{end}}
         <p>{{.Learned}}</p>
         <div class="report-actions">
-          {{if .LinkURL}}<a href="{{.LinkURL}}" rel="noreferrer" target="_blank">Open resource</a>{{end}}
-          <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">Review report</a>
+          {{if .LinkURL}}<a href="{{.LinkURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_resource"}}</a>{{end}}
+          <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.T "room.review_report"}}</a>
         </div>
       </article>
     {{else}}
-      <div class="empty-inline action-empty"><strong>No reports yet</strong><p class="muted">Once learners submit progress, reports will appear here for feedback.</p></div>
+      <div class="empty-inline action-empty"><strong>{{.T "room.reports.empty.mentor.title"}}</strong><p class="muted">{{.T "room.reports.empty.mentor.body"}}</p></div>
     {{end}}
   </section>
 
   <section class="panel task-panel" id="tasks">
     <div class="section-head">
       <div>
-        <p class="eyebrow">Execution</p>
-        <h2>Open tasks</h2>
+        <p class="eyebrow">{{.T "room.tasks.execution_eyebrow"}}</p>
+        <h2>{{.T "room.tasks.execution_title"}}</h2>
       </div>
     </div>
     {{range .Tasks}}
@@ -618,24 +625,24 @@
           <span class="status {{.Status}}">{{.Status}}</span>
         </div>
         {{if .Detail}}<p>{{.Detail}}</p>{{end}}
-        <p class="muted">Assigned to {{.Assignee}}</p>
-        {{if .DueDate}}<p><span class="due-chip {{.DueState}}">Due {{.DueDate}}</span></p>{{end}}
+        <p class="muted">{{$.Tf "room.tasks.assigned_to" .Assignee}}</p>
+        {{if .DueDate}}<p><span class="due-chip {{.DueState}}">{{$.T "room.due_chip"}} {{.DueDate}}</span></p>{{end}}
         {{if .ReviewedAt}}
-          <p><span class="pill point-chip">Awarded {{.PointsAwarded}} / 5</span></p>
+          <p><span class="pill point-chip">{{$.Tf "room.tasks.awarded" .PointsAwarded}}</span></p>
         {{else if eq .Status "done"}}
           <form class="rubric" method="post" action="/rooms/{{$.Room.ID}}/tasks/{{.ID}}/review">
             <input type="hidden" name="csrf" value="{{$.CSRF}}">
-            <span class="rubric-label">Award points:</span>
-            <button type="submit" name="points" value="1" title="needs more work">1</button>
+            <span class="rubric-label">{{$.T "room.rubric.label"}}</span>
+            <button type="submit" name="points" value="1" title="{{$.T "room.rubric.title1"}}">1</button>
             <button type="submit" name="points" value="2">2</button>
-            <button type="submit" name="points" value="3" title="good">3</button>
+            <button type="submit" name="points" value="3" title="{{$.T "room.rubric.title3"}}">3</button>
             <button type="submit" name="points" value="4">4</button>
-            <button type="submit" name="points" value="5" title="exceptional">5</button>
+            <button type="submit" name="points" value="5" title="{{$.T "room.rubric.title5"}}">5</button>
           </form>
         {{end}}
       </article>
     {{else}}
-      <div class="empty-inline action-empty"><strong>No open tasks</strong><p class="muted">Assign a task below. Once a learner marks it <em>done</em>, you can award 1–5 points using the same scale every time.</p></div>
+      <div class="empty-inline action-empty"><strong>{{.T "room.tasks.empty.mentor.title"}}</strong><p class="muted">{{.T "room.tasks.empty.mentor.body"}}</p></div>
     {{end}}
   </section>
 </div>
@@ -646,17 +653,17 @@
   <section class="panel" id="invite">
     <div class="section-head">
       <div>
-        <p class="eyebrow">Access</p>
-        <h2>Invite</h2>
+        <p class="eyebrow">{{.T "room.invite.eyebrow"}}</p>
+        <h2>{{.T "room.invite.title"}}</h2>
       </div>
     </div>
     <form hx-post="/rooms/{{.Room.ID}}/invites" hx-target="#invite-result" method="post" class="inline">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <select name="role">
-        <option value="learner">learner</option>
-        <option value="mentor">mentor</option>
+        <option value="learner">{{.T "room.invite.option.learner"}}</option>
+        <option value="mentor">{{.T "room.invite.option.mentor"}}</option>
       </select>
-      <button type="submit">Create invite</button>
+      <button type="submit">{{.T "room.invite.submit"}}</button>
     </form>
     <div id="invite-result"></div>
   </section>
@@ -664,44 +671,44 @@
   <section class="panel">
     <div class="section-head">
       <div>
-        <p class="eyebrow">Mentor action</p>
-        <h2>Assign Task</h2>
+        <p class="eyebrow">{{.T "room.assign.eyebrow"}}</p>
+        <h2>{{.T "room.assign.title"}}</h2>
       </div>
     </div>
     {{if .RoomLearners}}
     <form method="post" action="/rooms/{{.Room.ID}}/tasks" class="stack">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
-      <label>Assignee
+      <label>{{.T "form.assignee"}}
         <select name="assigned_to" required>
-          <option value="all">All learners ({{len .RoomLearners}})</option>
+          <option value="all">{{.Tf "room.assign.all" (len .RoomLearners)}}</option>
           {{range .RoomLearners}}<option value="{{.UserID}}">{{.Name}}</option>{{end}}
         </select>
       </label>
-      <label>Title <input name="title" required></label>
-      <label>Detail <textarea name="detail"></textarea></label>
-      <label>Deadline <input name="due_date" type="date"></label>
-      <button type="submit">Assign</button>
+      <label>{{.T "form.title"}} <input name="title" required></label>
+      <label>{{.T "form.detail"}} <textarea name="detail"></textarea></label>
+      <label>{{.T "form.deadline"}} <input name="due_date" type="date"></label>
+      <button type="submit">{{.T "room.assign.submit"}}</button>
     </form>
     {{else}}
-    <p class="muted">Invite a learner to this room before assigning tasks.</p>
+    <p class="muted">{{.T "room.assign.empty"}}</p>
     {{end}}
   </section>
 
   <section class="panel" id="room-settings">
     <div class="section-head">
       <div>
-        <p class="eyebrow">Room settings</p>
-        <h2>Cohort options</h2>
+        <p class="eyebrow">{{.T "room.settings.eyebrow"}}</p>
+        <h2>{{.T "room.settings.title"}}</h2>
       </div>
     </div>
     <form method="post" action="/rooms/{{.Room.ID}}/settings" class="stack">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <label class="checkbox-row">
         <input type="checkbox" name="leaderboard_visible" {{if .Room.LeaderboardVisible}}checked{{end}}>
-        <span>Show the leaderboard to all learners in this room</span>
+        <span>{{.T "room.settings.leaderboard"}}</span>
       </label>
-      <p class="muted">Off: each learner only sees their own score and rank. On: every learner sees the full cohort ranking. You always see the full leaderboard below.</p>
-      <button type="submit">Save room settings</button>
+      <p class="muted">{{.T "room.settings.leaderboard.help"}}</p>
+      <button type="submit">{{.T "room.settings.submit"}}</button>
     </form>
   </section>
 </div>
@@ -709,37 +716,37 @@
 <section class="panel" id="leaderboard">
   <div class="section-head">
     <div>
-      <p class="eyebrow">Gamification</p>
-      <h2>Leaderboard</h2>
+      <p class="eyebrow">{{.T "room.leaderboard.eyebrow"}}</p>
+      <h2>{{.T "room.leaderboard.title"}}</h2>
     </div>
   </div>
   {{if .Leaderboard}}
   <ol class="leaderboard">
     {{range .Leaderboard}}
-      <li><span class="rank">#{{.Rank}}</span><strong>{{.Name}}</strong><span class="pill point-chip">{{.Points}} pts</span></li>
+      <li><span class="rank">#{{.Rank}}</span><strong>{{.Name}}</strong><span class="pill point-chip">{{$.Tf "room.leaderboard.pts" .Points}}</span></li>
     {{end}}
   </ol>
   {{else}}
-  <div class="empty-inline"><strong>No points awarded yet</strong><p class="muted">Review completed tasks on the same 1–5 scale to populate the leaderboard.</p></div>
+  <div class="empty-inline"><strong>{{.T "room.leaderboard.empty.title"}}</strong><p class="muted">{{.T "room.leaderboard.empty.body"}}</p></div>
   {{end}}
 </section>
 
 <section class="panel" id="members">
   <div class="section-head">
     <div>
-      <p class="eyebrow">People</p>
-      <h2>Members</h2>
+      <p class="eyebrow">{{.T "room.members.eyebrow"}}</p>
+      <h2>{{.T "room.members.title"}}</h2>
     </div>
   </div>
   <div class="member-list">
-    <div class="table-head"><span>Name</span><span>Role</span><span>Last report</span><span>Tasks</span></div>
+    <div class="table-head"><span>{{.T "room.members.col.name"}}</span><span>{{.T "room.members.col.role"}}</span><span>{{.T "room.members.col.last"}}</span><span>{{.T "room.members.col.tasks"}}</span></div>
     {{range .Members}}
     <div class="member-row">
       <span class="member-avatar">{{printf "%.1s" .Name}}</span>
       <strong>{{.Name}}</strong>
-      <span class="pill">{{$.Room.RoleLabel .Role}}</span>
-      <span>{{if .LastReport}}{{.LastReport}}{{else}}no report{{end}}</span>
-      <span>{{.OpenTasks}} open</span>
+      <span class="pill">{{$.RoleLabel $.Room.Mode .Role}}</span>
+      <span>{{if .LastReport}}{{.LastReport}}{{else}}{{$.T "room.members.no_report"}}{{end}}</span>
+      <span>{{$.Tf "room.members.open" .OpenTasks}}</span>
     </div>
     {{end}}
   </div>
@@ -750,33 +757,33 @@
 <section class="panel" id="my-progress">
   <div class="section-head">
     <div>
-      <p class="eyebrow">Your score</p>
-      <h2>Points in this room</h2>
+      <p class="eyebrow">{{.T "room.score.eyebrow"}}</p>
+      <h2>{{.T "room.score.title"}}</h2>
     </div>
   </div>
   <div class="score-grid">
-    <div><span>Points</span><strong>{{.MyPoints}}</strong></div>
+    <div><span>{{.T "room.score.points"}}</span><strong>{{.MyPoints}}</strong></div>
     {{if gt .MyRank.Total 0}}
-      <div><span>Rank</span><strong>#{{.MyRank.Position}} <small>of {{.MyRank.Total}}</small></strong></div>
+      <div><span>{{.T "room.score.rank"}}</span><strong>#{{.MyRank.Position}} <small>{{.Tf "room.score.of" .MyRank.Total}}</small></strong></div>
     {{end}}
   </div>
   {{if .Leaderboard}}
-    <p class="muted">Your mentor has made the leaderboard visible to everyone in this room.</p>
+    <p class="muted">{{.T "room.score.visible"}}</p>
     <ol class="leaderboard">
       {{range .Leaderboard}}
-        <li {{if eq .UserID $.User.ID}}class="me"{{end}}><span class="rank">#{{.Rank}}</span><strong>{{.Name}}</strong><span class="pill point-chip">{{.Points}} pts</span></li>
+        <li {{if eq .UserID $.User.ID}}class="me"{{end}}><span class="rank">#{{.Rank}}</span><strong>{{.Name}}</strong><span class="pill point-chip">{{$.Tf "room.leaderboard.pts" .Points}}</span></li>
       {{end}}
     </ol>
   {{else}}
-    <p class="muted">Points are awarded after your mentor reviews completed tasks on a 1–5 scale. Same scale across every task, so ranks stay comparable.</p>
+    <p class="muted">{{.T "room.score.hidden"}}</p>
   {{end}}
 </section>
 
 <section class="panel" id="reports">
   <div class="section-head">
     <div>
-      <p class="eyebrow">Timeline</p>
-      <h2>Reports</h2>
+      <p class="eyebrow">{{.T "room.reports.eyebrow.timeline"}}</p>
+      <h2>{{.T "room.reports.title.learner"}}</h2>
     </div>
   </div>
   {{range .Reports}}
@@ -786,16 +793,16 @@
           <strong>{{.Author}}</strong>
           <p class="muted">{{.CreatedAt}}</p>
         </div>
-        <a class="comment-link" href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{.Comments}} comments</a>
+        <a class="comment-link" href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.Tf "room.comments" .Comments}}</a>
       </div>
-      {{if .Blocker}}<p class="blocker">Blocked: {{.Blocker}}</p>{{end}}
+      {{if .Blocker}}<p class="blocker">{{$.Tf "room.blocker.label" .Blocker}}</p>{{end}}
       <p>{{.Learned}}</p>
       <div class="report-actions">
-        {{if .LinkURL}}<a href="{{.LinkURL}}" rel="noreferrer" target="_blank">Open resource</a>{{end}}
-        <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">Review report</a>
+        {{if .LinkURL}}<a href="{{.LinkURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_resource"}}</a>{{end}}
+        <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.T "room.review_report"}}</a>
       </div>
     </article>
-  {{else}}<div class="empty-inline"><strong>No reports yet</strong><p class="muted">The first progress update will start the room timeline.</p></div>{{end}}
+  {{else}}<div class="empty-inline"><strong>{{.T "room.reports.empty.learner.title"}}</strong><p class="muted">{{.T "room.reports.empty.learner.body"}}</p></div>{{end}}
 </section>
 {{end}}
 {{end}}
@@ -803,42 +810,42 @@
 
 {{define "invite_created"}}
 <div class="invite-result">
-  <p class="alert">Invite code: <code>{{.InviteCode}}</code></p>
-  <p class="muted">Join URL: <code>/join?code={{.InviteCode}}</code></p>
+  <p class="alert">{{.T "invite.created.code"}} <code>{{.InviteCode}}</code></p>
+  <p class="muted">{{.T "invite.created.url"}} <code>/join?code={{.InviteCode}}</code></p>
 </div>
 {{end}}
 
 {{define "report"}}{{template "layout_start" .}}
-<p><a class="back-link" href="/rooms/{{.Room.ID}}">Back to {{.Room.Name}}</a></p>
+<p><a class="back-link" href="/rooms/{{.Room.ID}}">{{.Tf "report.back" .Room.Name}}</a></p>
 <section class="panel">
   <div class="report-title">
     <div>
-      <p class="eyebrow">Progress report</p>
+      <p class="eyebrow">{{.T "report.eyebrow"}}</p>
       <h1>{{.Report.Author}}</h1>
       <p class="muted">{{.Report.CreatedAt}}</p>
     </div>
-    {{if .Report.Blocker}}<span class="status attention">blocked</span>{{end}}
+    {{if .Report.Blocker}}<span class="status attention">{{.T "report.status.blocked"}}</span>{{end}}
   </div>
   <div class="report-detail-grid">
-    <section><h2>Learned</h2><p>{{.Report.Learned}}</p></section>
-    <section><h2>Practiced</h2><p>{{.Report.Practiced}}</p></section>
-    {{if .Report.Blocker}}<section><h2>Blocker</h2><p class="blocker">{{.Report.Blocker}}</p></section>{{end}}
-    <section><h2>Next</h2><p>{{.Report.NextPlan}}</p></section>
+    <section><h2>{{.T "report.h.learned"}}</h2><p>{{.Report.Learned}}</p></section>
+    <section><h2>{{.T "report.h.practiced"}}</h2><p>{{.Report.Practiced}}</p></section>
+    {{if .Report.Blocker}}<section><h2>{{.T "report.h.blocker"}}</h2><p class="blocker">{{.Report.Blocker}}</p></section>{{end}}
+    <section><h2>{{.T "report.h.next"}}</h2><p>{{.Report.NextPlan}}</p></section>
   </div>
-  {{if .Report.LinkURL}}<p class="report-actions"><a href="{{.Report.LinkURL}}" rel="noreferrer" target="_blank">Open resource</a></p>{{end}}
+  {{if .Report.LinkURL}}<p class="report-actions"><a href="{{.Report.LinkURL}}" rel="noreferrer" target="_blank">{{.T "room.open_resource"}}</a></p>{{end}}
 </section>
 <section class="panel">
   <div class="section-head">
     <div>
-      <p class="eyebrow">Discussion</p>
-      <h2>Comments</h2>
+      <p class="eyebrow">{{.T "report.comments.eyebrow"}}</p>
+      <h2>{{.T "report.comments.title"}}</h2>
     </div>
   </div>
-  {{range .Comments}}<article class="comment-card"><strong>{{.Author}}</strong><p>{{.Body}}</p><p class="muted">{{.CreatedAt}}</p></article>{{else}}<div class="empty-inline"><strong>No comments yet</strong><p class="muted">Feedback and clarifications will appear here.</p></div>{{end}}
+  {{range .Comments}}<article class="comment-card"><strong>{{.Author}}</strong><p>{{.Body}}</p><p class="muted">{{.CreatedAt}}</p></article>{{else}}<div class="empty-inline"><strong>{{.T "report.comments.empty.title"}}</strong><p class="muted">{{.T "report.comments.empty.body"}}</p></div>{{end}}
   <form method="post" action="/rooms/{{.Room.ID}}/reports/{{.Report.ID}}/comments" class="stack">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
-    <label>Comment <textarea name="body" required placeholder="Write feedback, ask a clarifying question, or confirm the next step"></textarea></label>
-    <button type="submit">Comment</button>
+    <label>{{.T "form.comment"}} <textarea name="body" required placeholder="{{.T "report.comments.placeholder"}}"></textarea></label>
+    <button type="submit">{{.T "report.comments.submit"}}</button>
   </form>
 </section>
 {{template "layout_end" .}}{{end}}
@@ -847,34 +854,34 @@
 <section class="panel">
   <div class="section-head">
     <div>
-      <p class="eyebrow">Account</p>
-      <h2>Notification settings</h2>
+      <p class="eyebrow">{{.T "settings.eyebrow"}}</p>
+      <h2>{{.T "settings.title"}}</h2>
     </div>
   </div>
-  <p class="muted">Choose how Sinau pings you about task deadlines. Notifications are off by default — turn them on to start receiving reminders.</p>
+  <p class="muted">{{.T "settings.lede"}}</p>
   <form method="post" action="/settings" class="stack">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label class="checkbox-row">
       <input type="checkbox" name="enabled" {{if .Prefs.Enabled}}checked{{end}}>
-      <span>Send me deadline reminders</span>
+      <span>{{.T "settings.enabled"}}</span>
     </label>
-    <label>Channel
+    <label>{{.T "form.channel"}}
       <select name="channel">
-        <option value="off" {{if eq .Prefs.Channel "off"}}selected{{end}}>Off</option>
-        <option value="email" {{if eq .Prefs.Channel "email"}}selected{{end}}>Email — {{.User.Email}}</option>
-        <option value="whatsapp" {{if eq .Prefs.Channel "whatsapp"}}selected{{end}}>WhatsApp (preview)</option>
-        <option value="telegram" {{if eq .Prefs.Channel "telegram"}}selected{{end}}>Telegram (preview)</option>
-        <option value="log" {{if eq .Prefs.Channel "log"}}selected{{end}}>Log only (dev / admin debugging)</option>
+        <option value="off" {{if eq .Prefs.Channel "off"}}selected{{end}}>{{.T "settings.channel.off"}}</option>
+        <option value="email" {{if eq .Prefs.Channel "email"}}selected{{end}}>{{.Tf "settings.channel.email" .User.Email}}</option>
+        <option value="whatsapp" {{if eq .Prefs.Channel "whatsapp"}}selected{{end}}>{{.T "settings.channel.whatsapp"}}</option>
+        <option value="telegram" {{if eq .Prefs.Channel "telegram"}}selected{{end}}>{{.T "settings.channel.telegram"}}</option>
+        <option value="log" {{if eq .Prefs.Channel "log"}}selected{{end}}>{{.T "settings.channel.log"}}</option>
       </select>
     </label>
-    <label>WhatsApp number
-      <input name="whatsapp_number" type="text" value="{{.Prefs.WhatsAppNumber}}" placeholder="+6281234567890" maxlength="32">
+    <label>{{.T "form.whatsapp_number"}}
+      <input name="whatsapp_number" type="text" value="{{.Prefs.WhatsAppNumber}}" placeholder="{{.T "settings.whatsapp.placeholder"}}" maxlength="32">
     </label>
-    <label>Telegram chat ID
-      <input name="telegram_chat_id" type="text" value="{{.Prefs.TelegramChatID}}" placeholder="123456789" maxlength="32">
+    <label>{{.T "form.telegram_chatid"}}
+      <input name="telegram_chat_id" type="text" value="{{.Prefs.TelegramChatID}}" placeholder="{{.T "settings.telegram.placeholder"}}" maxlength="32">
     </label>
-    <p class="muted">Reminders go out at most once per task per day. Mentors get notifications for tasks they have assigned; learners get them for tasks assigned to them. If the chosen channel is not yet wired by the operator (no SMTP server, no WhatsApp gateway, no Telegram bot), reminders quietly fall back to the server log instead of failing. WhatsApp and Telegram are listed as <em>preview</em>: the routing is in place but the actual delivery integration is not yet enabled.</p>
-    <button type="submit">Save settings</button>
+    <p class="muted">{{.T "settings.help"}}</p>
+    <button type="submit">{{.T "settings.submit"}}</button>
   </form>
 </section>
 {{template "layout_end" .}}{{end}}
@@ -882,57 +889,57 @@
 {{define "help"}}{{template "layout_start" .}}
 <section class="landing-hero help-hero">
   <div class="landing-content">
-    <p class="eyebrow">Getting started</p>
-    <h1>How Sinau works</h1>
-    <p class="landing-lede">Sinau is a private learning tracker with two room formats: Mentorship for progress check-ins and Classroom for assignments, submissions, and review.</p>
+    <p class="eyebrow">{{.T "help.eyebrow"}}</p>
+    <h1>{{.T "help.title"}}</h1>
+    <p class="landing-lede">{{.T "help.lede"}}</p>
     <div class="landing-actions">
-      {{if .SetupNeeded}}<a class="button primary" href="/setup">Create first room</a>{{end}}
-      {{if not .User}}<a class="button secondary" href="/login">Login</a><a class="button secondary" href="/join">Join with invite</a>{{end}}
+      {{if .SetupNeeded}}<a class="button primary" href="/setup">{{.T "help.cta.create"}}</a>{{end}}
+      {{if not .User}}<a class="button secondary" href="/login">{{.T "help.cta.login"}}</a><a class="button secondary" href="/join">{{.T "help.cta.join"}}</a>{{end}}
     </div>
   </div>
 </section>
 
 <section class="panel help-section">
-  <div class="section-head"><div><p class="eyebrow">Role guide</p><h2>If you are a mentor</h2></div></div>
+  <div class="section-head"><div><p class="eyebrow">{{.T "help.mentor.eyebrow"}}</p><h2>{{.T "help.mentor.title"}}</h2></div></div>
   <ol class="help-steps">
-    <li><strong>Set up</strong> the first mentor account and your first room (only the first user can do this).</li>
-    <li><strong>Choose a room format.</strong> Use <em>Mentorship</em> for guided cohorts with check-ins and tasks. Use <em>Classroom</em> for teacher/student assignment submission workflows.</li>
-    <li><strong>Invite learners</strong> from the room page — each code is single-use and expires after seven days.</li>
-    <li><strong>Review reports.</strong> Learners post weekly check-ins. Comment, flag blockers, keep them moving.</li>
-    <li><strong>Assign tasks</strong> with optional deadlines. Pick a single learner or "All learners" to fan one task out to every learner in the room.</li>
-    <li><strong>Review completed tasks</strong> on a fixed <em>1–5 scale</em> (1 = needs more work, 3 = good, 5 = exceptional). Same scale across every task → leaderboards stay comparable.</li>
-    <li><strong>Toggle the leaderboard</strong> for each cohort in <em>Room settings</em> — off keeps it private, on shows the full ranking to learners.</li>
+    <li>{{.T "help.mentor.s1"}}</li>
+    <li>{{.T "help.mentor.s2"}}</li>
+    <li>{{.T "help.mentor.s3"}}</li>
+    <li>{{.T "help.mentor.s4"}}</li>
+    <li>{{.T "help.mentor.s5"}}</li>
+    <li>{{.T "help.mentor.s6"}}</li>
+    <li>{{.T "help.mentor.s7"}}</li>
   </ol>
 </section>
 
 <section class="panel help-section">
-  <div class="section-head"><div><p class="eyebrow">Room formats</p><h2>Mentorship vs Classroom</h2></div></div>
+  <div class="section-head"><div><p class="eyebrow">{{.T "help.formats.eyebrow"}}</p><h2>{{.T "help.formats.title"}}</h2></div></div>
   <ol class="help-steps">
-    <li><strong>Mentorship</strong> gives learners a progress form, blockers, resource links, mentor comments, deadline tasks, points, and optional leaderboards.</li>
-    <li><strong>Classroom</strong> gives mentors assignment publishing, deadline fields, student submission links, review status, feedback, scores, invites, and a class roster.</li>
-    <li><strong>Separate rooms</strong> keep workflows clean. A mentor can create multiple rooms, so one cohort can be mentorship-style while another is classroom-style.</li>
+    <li>{{.T "help.formats.s1"}}</li>
+    <li>{{.T "help.formats.s2"}}</li>
+    <li>{{.T "help.formats.s3"}}</li>
   </ol>
 </section>
 
 <section class="panel help-section">
-  <div class="section-head"><div><p class="eyebrow">Role guide</p><h2>If you are a learner</h2></div></div>
+  <div class="section-head"><div><p class="eyebrow">{{.T "help.learner.eyebrow"}}</p><h2>{{.T "help.learner.title"}}</h2></div></div>
   <ol class="help-steps">
-    <li><strong>Join</strong> with the invite code your mentor sent you.</li>
-    <li><strong>Submit progress</strong> regularly — what you learned, practiced, your blocker (if any), and the next concrete step.</li>
-    <li><strong>Work through tasks</strong>: move them <code>todo → doing → done</code>. Once <em>done</em>, your mentor reviews and awards points.</li>
-    <li><strong>Track your score</strong> on the room page. If the mentor has enabled it for the cohort, you also see the leaderboard.</li>
+    <li>{{.T "help.learner.s1"}}</li>
+    <li>{{.T "help.learner.s2"}}</li>
+    <li>{{.T "help.learner.s3"}}</li>
+    <li>{{.T "help.learner.s4"}}</li>
   </ol>
 </section>
 
 {{if .NotificationsEnabled}}
 <section class="panel help-section">
-  <div class="section-head"><div><p class="eyebrow">Stay in the loop</p><h2>Notifications</h2></div></div>
-  <p>Reminders are off by default. Open <a href="/settings">Settings</a> after logging in to enable deadline reminders and pick a channel (email is the standard option). Both mentors and learners can opt in — only the ones who turn it on get pinged. Reminders fire at most once per task per day.</p>
+  <div class="section-head"><div><p class="eyebrow">{{.T "help.notif.eyebrow"}}</p><h2>{{.T "help.notif.title"}}</h2></div></div>
+  <p>{{.T "help.notif.body.prefix"}}<a href="/settings">{{.T "help.notif.body.link"}}</a>{{.T "help.notif.body.suffix"}}</p>
 </section>
 {{end}}
 
 <section class="panel help-section">
-  <div class="section-head"><div><p class="eyebrow">Why points</p><h2>Gamification, fairly</h2></div></div>
-  <p>Every task is reviewed on the same 1–5 rubric, so cohort leaderboards reflect output rather than how generous a particular mentor is feeling. Mentors set leaderboard visibility per room.</p>
+  <div class="section-head"><div><p class="eyebrow">{{.T "help.points.eyebrow"}}</p><h2>{{.T "help.points.title"}}</h2></div></div>
+  <p>{{.T "help.points.body"}}</p>
 </section>
 {{template "layout_end" .}}{{end}}

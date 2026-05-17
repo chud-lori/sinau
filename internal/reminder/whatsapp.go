@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"sinau/internal/domain"
+	"sinau/internal/i18n"
 )
 
 // WhatsAppConfig points at a running instance of
@@ -72,8 +73,13 @@ func (w *WhatsAppNotifier) NotifyTaskDue(ctx context.Context, to Recipient, rem 
 	// Stub: prove DI is end-to-end. Replace this block with the real HTTP
 	// call when the gateway is wired. We return nil so the worker proceeds
 	// to MarkTaskReminded — i.e. no retry storm against a non-existent API.
-	log.Printf("[stub] whatsapp would send to=%s task=%q due=%s room=%q (apiurl=%s)",
-		to.WhatsApp, rem.Title, rem.DueDate, rem.RoomName, w.cfg.APIURL)
+	lang := i18n.Lang(to.Language)
+	if !i18n.IsValid(lang) {
+		lang = i18n.Default
+	}
+	body := i18n.Tf(lang, "notif.task_due.short", rem.Title, rem.RoomName, rem.DueDate)
+	log.Printf("[stub] whatsapp would send to=%s lang=%s body=%q (apiurl=%s)",
+		to.WhatsApp, lang, body, w.cfg.APIURL)
 	_ = w.client // silence "unused" until the real call lands.
 	return nil
 }

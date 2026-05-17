@@ -136,3 +136,15 @@ form.inline input[type="text"],form.inline input:not([type]){width:auto}
 .create-room-form input[name="name"]{flex:1 1 220px;min-width:0;width:auto}
 .create-room-form select{flex:0 0 160px;width:auto}
 .create-room-form button{flex:0 0 auto;min-width:140px}
+
+/* Language picker — sits inside the topbar nav, between regular links and
+   user-specific actions. Each non-active language renders as a small
+   button form-posting to /lang; the active one renders as a non-clickable
+   chip so users see what they're already on. */
+.lang-picker{display:inline-flex;align-items:center;gap:4px;margin:0}
+.lang-picker .lang-switch{background:transparent;border:1px solid var(--line);color:var(--muted);font:inherit;padding:4px 10px;border-radius:999px;cursor:pointer}
+.lang-picker .lang-switch:hover{color:var(--text);border-color:var(--accent)}
+.lang-picker .lang-current{font-size:13px;color:var(--muted);padding:4px 10px;border-radius:999px;background:rgba(23,107,82,.08);border:1px solid rgba(23,107,82,.2)}
+@media (max-width:640px){
+  .lang-picker .lang-switch,.lang-picker .lang-current{font-size:12px;padding:3px 8px}
+}
