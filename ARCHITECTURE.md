@@ -30,10 +30,10 @@ database process, no container required.
 | `cmd/sinau`         | Entry point. Reads env, opens store, builds web server, starts reminder worker, handles SIGTERM. |
 | `internal/auth`     | argon2id password hashing, secure random tokens, input validation helpers. |
 | `internal/domain`   | Pure structs and constants shared between layers. Role/mode validation. No I/O. |
-| `internal/store`    | SQLite migrations + every SQL query in the app. The only package that imports `database/sql`. |
+| `internal/store`    | SQLite migrations + every SQL query in the app. The only package that imports `database/sql`. Split by domain across files (see below). |
 | `internal/web`      | HTTP routes, middleware (CSRF, rate limit, auth, security headers), handlers, template rendering. |
 | `internal/reminder` | `Notifier` interface, channel implementations (log, email, whatsapp stub, telegram stub), the `Worker` loop. |
-| `templates/app.html`| Single file holding every server-rendered view as named templates (`landing`, `login`, `join`, `setup`, `mentor_home`, `mentee_home`, `room`, `report`, `report_edit`, `task_edit`, `assignment_edit`, `profile`, `settings`, `help`, `onboarding`, `search`, `search_results`, `coaching`, `growth`, `grades`, `invite_created`, `link_row`, `lang_picker`). |
+| `templates/app.html`| Single file holding every server-rendered view as named templates (`landing`, `login`, `join`, `setup`, `mentor_home`, `mentee_home`, `room`, `report`, `report_edit`, `task_page`, `task_edit`, `profile`, `settings`, `help`, `onboarding`, `search`, `search_results`, `coaching`, `growth`, `grades`, `invite_created`, `link_row`, `lang_picker`). |
 | `static/`           | CSS (hand-rolled, design tokens), vendored htmx, SVG favicon. |
 
 ## Data model
@@ -42,13 +42,17 @@ database process, no container required.
 users ─┬─< sessions
        ├─< memberships >─ rooms ─< invites
        ├─< reports ─< comments
-       ├─< tasks (assigned_to, assigned_by)
-       ├─< submissions (assignment_id, student_id)
+       ├─< tasks (assigned_to: "" = broadcast, else specific mentee)
+       │      └─< task_submissions (UNIQUE per task+student) ─< task_submission_links
        ├─< notification_prefs
        └─< points_ledger
-       
-rooms ─< assignments ─< submissions
 ```
+
+Tasks and submissions are **unified across modes**: one `tasks` table
+serves both mentorship rooms (where `assigned_to` is a specific mentee
+or `''` for "broadcast to everyone") and classroom rooms (always
+broadcast). The viewer's status for a task is derived from their row
+in `task_submissions` — no `status` column on `tasks` itself.
 
 Key tables:
 
@@ -58,9 +62,10 @@ Key tables:
 - **memberships** — `(room_id, user_id)` PK, `role` (`mentor` | `mentee`).
 - **invites** — single-use codes (`code_hash`) bound to a room + role.
 - **reports** / **comments** — mentorship room artefacts. Both carry `edited_at` (stamped on every update) and `deleted_at` (soft-delete; non-empty rows are filtered from every read).
-- **tasks** — mentorship room artefacts. `reviewed_at` locks status changes, edits, AND deletion once a mentor awards points. Same `edited_at` / `deleted_at` columns as reports.
-- **assignments** / **submissions** — classroom room artefacts. `UNIQUE(assignment_id, student_id)` so resubmits update in place. `reviewed_at = ''` on a submission means it's awaiting review. Assignments carry `edited_at` / `deleted_at`; submissions don't (resubmit is the edit path, and they have no soft-delete since the UNIQUE constraint would block re-submission).
-- **points_ledger** — append-only point awards. `UNIQUE(source, source_id)` prevents double-award races.
+- **tasks** — the unified work-item table. `assigned_to = ''` means broadcast (every mentee/student in the room can submit); a non-empty value names a specific mentee. `resource_url`, `detail`, `due_date` are optional. `edited_at` / `deleted_at` for the edit and soft-delete trail; `last_reminded_at` for per-task dedup of deadline reminders.
+- **task_submissions** — one row per `(task, student)` pair (UNIQUE), so a resubmit updates in place. `status` is `'submitted' | 'reviewed' | 'revise'`. `reviewed_at = ''` is the gate for `ReviewTaskSubmission` (re-review of an already-reviewed submission returns 404).
+- **task_submission_links** — labelled submission links (multi-link form).
+- **points_ledger** — append-only point awards. `UNIQUE(source, source_id)` prevents double-award races. Keyed off the submission ID, so a resubmit-then-re-review correctly replaces the score.
 - **notification_prefs** — opt-in per user for deadline reminders. Channel + contact fields (email lives on `users`, WhatsApp number and Telegram chat ID live here). Engagement notifications gate on `users.engagement_notif_enabled` *and* this row.
 
 ## Role model (the layered roles)
@@ -92,31 +97,54 @@ Inviting a mentor to a room grants room-level mentor powers but **not** account-
 
 ## Authorization
 
-Every room-scoped handler calls `store.RoomAccess(roomID, userID)` first; the returned `role` is the only trusted source for downstream checks. Mode-specific handlers also check `room.Mode`:
+Every room-scoped handler calls `store.RoomAccess(roomID, userID)` first; the returned `role` is the only trusted source for downstream checks. Mode-specific behaviour lives in the handler body (the unified `/tasks` route serves both modes, with different validation):
 
-- `createTask` — requires `role == mentor`.
-- `createAssignment`, `reviewSubmission` — require `role == mentor` **and** `room.Mode == classroom`.
-- `submitAssignment` — requires `role == mentee` **and** `room.Mode == classroom`.
+- `createTask`, `editTask`, `deleteTask` — require `role == mentor`. In classroom mode `assigned_to` is forced to broadcast and `detail` + `due_date` become required.
+- `submitTask` — requires `role == mentee`. The store also verifies the task is broadcast or individually assigned to this caller.
+- `reviewSubmission` — requires `role == mentor`. Score is validated per mode: 1–5 in mentorship (rolls into `points_ledger`), 0–100 in classroom (gradebook only).
 - `updateRoomSettings`, `createInvite` — require `role == mentor`.
 
 Edit / soft-delete handlers follow a shared rule: the author of a piece of content can always edit or delete it; the room's mentor can edit or delete anyone's content in their room.
 
 - `editReport`, `deleteReport` — author OR room mentor.
 - `editComment`, `deleteComment` — author OR room mentor.
-- `editTask`, `deleteTask` — room mentor only (mentees never edit task content; status updates go through `updateTask`).
-- `editAssignment`, `deleteAssignment` — room mentor only, classroom rooms only.
+- `editTask`, `deleteTask` — room mentor only (mentees attach work via `submitTask`; they never edit the task itself).
 
 Idempotency / lock guards in the store layer:
 
-- `UpdateTaskStatus` won't change the status of a reviewed task (`WHERE reviewed_at = ''`).
-- `UpdateTask` / `DeleteTask` won't edit or delete a reviewed task — same `reviewed_at = ''` guard, so points already awarded can't be silently undone by deleting the task.
-- `ReviewSubmission` won't overwrite a previously reviewed submission (`WHERE reviewed_at = ''`). Resubmission by the student clears `reviewed_at` so the review cycle can repeat.
+- `ReviewTaskSubmission` won't overwrite a previously reviewed submission (`WHERE reviewed_at = ''`). The handler maps a no-op return to 404 so a double-submit just bounces.
+- A resubmission by the student (`SubmitTask` against an existing row) clears the review state and deletes the matching `points_ledger` row so a re-review can re-award fairly. The `UNIQUE(source, source_id)` on the ledger would otherwise block re-award.
 - Every read query filters `deleted_at = ''` so soft-deleted rows disappear from every view in one place; the row stays in the DB for audit.
+
+## Store package layout
+
+Every SQL query lives in `internal/store/`, split by domain so a single
+file never grows past a few hundred lines. All files share the same
+`package store` — the split is for navigability, not encapsulation.
+
+| File              | Responsibility                                                                  |
+|-------------------|---------------------------------------------------------------------------------|
+| `store.go`        | `Store` handle, `Open`/`Close`, shared `insertLinksTx` / `linksByParent` helpers |
+| `migrate.go`      | `Migrate`, `schemaV1`, `columnExists`                                            |
+| `users.go`        | Users, sessions, profile, password, CSRF                                         |
+| `rooms.go`        | Rooms, memberships, `Members`, `RoomData` aggregate                              |
+| `invites.go`      | Invite create / preview / claim / listing                                        |
+| `reports.go`      | Reports + comments                                                               |
+| `tasks.go`        | Unified tasks + task_submissions                                                 |
+| `notifications.go`| `DueTaskReminders`, notification_prefs                                           |
+| `points.go`       | points_ledger reads (leaderboards, rank, totals)                                 |
+| `search.go`       | FTS5 cross-source query                                                          |
+| `dashboards.go`   | `MentorDashboard`, `MenteeDashboard`, attention queries                          |
+| `metrics.go`      | `CoachMetrics`, `GrowthMetrics`, `StudentGrades`                                 |
+
+Adding a new domain = add a new file with the same `package store`. The
+shared helpers (`insertLinksTx`, `linksByParent`) and the `Store` handle
+itself live in `store.go`.
 
 ## Migrations
 
 Pre-launch history is squashed into a single migration. `schemaV1` in
-`internal/store/store.go` is the entire shape of the database — every
+`internal/store/migrate.go` is the entire shape of the database — every
 table created in final form, no incremental ALTERs. The runner is one
 generic `applyMigration(version, []string)` wrapped in a transaction.
 
@@ -128,21 +156,20 @@ closed.
 
 ```
   worker tick   ──┐ due tasks                  ┌─ off (skip)
-                  ├─→ dispatch ────────────────┤
-  worker tick   ──┘ due assignments            ├─ log (default fallback)
-                                               │
-  comment posted ─┐ NotifyEngagement           ├─ email (SMTP via net/smtp)
-  submission made ┼─→ Engagement.Dispatch ─────┤
-  feedback posted ┘ (synchronous, in goroutine)├─ whatsapp (stub)
-                                               │
+                  └─→ dispatch ────────────────┤
+                                               ├─ log (default fallback)
+  comment posted ─┐ NotifyEngagement           │
+  submission made ┼─→ Engagement.Dispatch ─────┼─ email (SMTP via net/smtp)
+  feedback posted ┘ (synchronous, in goroutine)│
+                                               ├─ whatsapp (stub)
                                                └─ telegram (stub)
 ```
 
 Two dispatch paths, one notifier registry:
 
-- **Deadline reminders** run from the `Worker` goroutine on a ticker. Dedup via `tasks.last_reminded_at` / `assignments.last_reminded_at` — one notification per task or assignment per day across all recipients.
+- **Deadline reminders** run from the `Worker` goroutine on a ticker. Dedup via `tasks.last_reminded_at` — one notification per task per day across all recipients. Mentorship-style individual tasks and classroom-style broadcast tasks flow through the same `DueTaskReminders` query (each row is one `(task, recipient)` pair).
 - **Engagement events** (`reminder.Engagement`) fire synchronously from web handlers after the underlying write commits: a comment on a report → report author; a submission → every mentor in the room; a teacher's feedback → the student. Dispatch is launched in a goroutine so the HTTP request never blocks on SMTP/HTTP fanout. Self-author events are dropped — never notify yourself.
-- `Notifier` interface has three methods: `NotifyTaskDue`, `NotifyAssignmentDue`, `NotifyEngagement(ctx, Recipient, EngagementEvent)`. Adding a new channel means implementing all three, plus a constant in `internal/domain`.
+- `Notifier` interface has two methods: `NotifyTaskDue(ctx, Recipient, TaskReminder)` and `NotifyEngagement(ctx, Recipient, EngagementEvent)`. Adding a new channel means implementing both, plus a constant in `internal/domain`.
 - The notifier registry is built once in `cmd/sinau/main.go` and shared between the worker and the engagement dispatcher.
 - `EmailNotifier` is real (SMTP, STARTTLS, falls back to log when `SINAU_SMTP_HOST/FROM` is unset).
 - `WhatsAppNotifier` and `TelegramNotifier` are **interface-ready stubs**: full config struct, `Configured()` check, fallback wiring, and TODO blocks pointing at the integration paths (`go-whatsapp-web-multidevice` REST daemon and Telegram Bot API). To finish wiring a channel, fill in the three `Notify*` bodies — no changes to migrations, store, worker, or web layer needed.
@@ -152,15 +179,14 @@ Two dispatch paths, one notifier registry:
 
 ## Search (FTS5)
 
-Five FTS5 virtual tables — one per searchable resource — backed by
+Four FTS5 virtual tables — one per searchable resource — backed by
 triggers that keep the index in lock-step with the source table:
 
 ```
-reports        ──AI/AU/AD──> reports_fts
-comments       ──AI/AU/AD──> comments_fts
-tasks          ──AI/AU/AD──> tasks_fts
-assignments    ──AI/AU/AD──> assignments_fts
-submissions    ──AI/AU/AD──> submissions_fts
+reports          ──AI/AU/AD──> reports_fts
+comments         ──AI/AU/AD──> comments_fts
+tasks            ──AI/AU/AD──> tasks_fts
+task_submissions ──AI/AU/AD──> task_submissions_fts
 ```
 
 Design notes:
@@ -173,11 +199,11 @@ Design notes:
   trigger re-syncs the row, and the search query joins against the
   source table to filter `deleted_at = ''`. Simpler than maintaining a
   "this is logically deleted" trigger path.
-- The `/search` query is one UNION ALL across the five tables, filtered
+- The `/search` query is one UNION ALL across the four tables, filtered
   per-source by the viewer's visibility rules (mentors see everything in
-  their rooms; mentees see only their own reports / tasks / submissions;
-  comments and assignments visible to all room members). Ranked by
-  `bm25()` ascending across the union.
+  their rooms; mentees see only their own reports / submissions and
+  broadcast-or-assigned-to-them tasks; comments visible to all room
+  members). Ranked by `bm25()` ascending across the union.
 - Snippets use ASCII STX/ETX (`\x02`/`\x03`) as match markers. The
   Go layer HTML-escapes the snippet text first, then swaps the markers
   for `<mark>` / `</mark>`. User content can never inject HTML tags.
@@ -195,16 +221,16 @@ ticker := time.NewTicker(every)             // SINAU_REMINDER_INTERVAL, default 
 for {
     select {
     case <-ctx.Done():       return
-    case <-ticker.C:         runOnce(ctx)   // scan both task + assignment due windows
+    case <-ticker.C:         runOnce(ctx)   // scan the due window
     }
 }
 ```
 
-`runOnce` makes two passes: (1) `DueTaskReminders` then per-task dispatch + `MarkTaskReminded`; (2) `DueAssignmentReminders` (fans each assignment out to all unsubmitted mentees) then `MarkAssignmentReminded` per unique assignment. Failure to mark dedup is logged but doesn't block the next iteration.
+`runOnce` calls `DueTaskReminders` (which fans each due task — individual or broadcast — out to one row per unsubmitted recipient), dispatches each one through its recipient's channel notifier, then stamps `MarkTaskReminded` once per unique task ID. Failure to mark dedup is logged but doesn't block the next iteration.
 
 ## Frontend
 
-- Server-rendered HTML via Go `html/template`. Single file (`templates/app.html`) with named templates (`landing`, `login`, `join`, `setup`, `mentor_home`, `mentee_home`, `room`, `report`, `report_edit`, `task_edit`, `assignment_edit`, `profile`, `settings`, `help`, `invite_created`, plus the `link_row` and `lang_picker` partials).
+- Server-rendered HTML via Go `html/template`. Single file (`templates/app.html`) with named templates (`landing`, `login`, `join`, `setup`, `mentor_home`, `mentee_home`, `room`, `report`, `report_edit`, `task_page`, `task_edit`, `profile`, `settings`, `help`, `invite_created`, plus the `link_row` and `lang_picker` partials).
 - Progressive enhancement via [htmx](https://htmx.org) — used for the invite form swap and the "add another link" multi-link inputs (`hx-get`, `hx-target`, `hx-swap=beforeend`).
 - Hand-rolled CSS with design tokens (`--bg`, `--accent`, `--line`, etc.) plus mobile breakpoints at 860px and 640px.
 - No JS build. No npm. htmx is vendored as a single file.
@@ -249,7 +275,7 @@ Test coverage focuses on the store (which encodes authorization rules and the FT
 
 ## Known tech debt (carried, not blocking)
 
-- `Assignment.MySubmissionStatus/URL/Feedback/Score` are viewer-specific fields on what should be a clean domain type. Refactor when the next feature touches submission shape; pure code-organisation, no user impact.
-- No pagination on `Reports` (`LIMIT 80`), `Submissions`, `Members`, `Assignments`. Acceptable for small rooms; revisit if one room ever exceeds ~30 mentees with months of weekly history.
+- `Task.MySubmissionStatus/Links/Feedback/Score` are viewer-specific fields on what should be a clean domain type. Acceptable while it keeps the list view a single round-trip; split if the type grows further.
+- No pagination on `Reports` (`LIMIT 80`), `Tasks`, `TaskSubmissions`, `Members`. Acceptable for small rooms; revisit if one room ever exceeds ~30 mentees with months of weekly history.
 - Soft-deleted rows are never reaped. `deleted_at` rows stay forever — fine until a heavy churn user accumulates noise. A background sweeper that hard-deletes rows past N days is a cheap follow-up.
 - Engagement notifications fire in fire-and-forget goroutines; a failure (SMTP down, network blip) is logged and lost. No retry queue, no surface in the UI. Acceptable for v1; if these become load-bearing, route through a persistent outbox.
