@@ -86,6 +86,12 @@ type PageData struct {
 	Assignment           domain.Assignment
 	Profile              *domain.User
 	SessionCount         int
+	SearchQuery          string
+	SearchHits           []domain.SearchHit
+	CoachMetrics         domain.CoachMetrics
+	Growth               domain.GrowthMetrics
+	GradeRooms           []domain.GradeRoom
+	WindowDays           int
 }
 
 // T returns the localised string for key in the page's active language.
@@ -169,6 +175,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /profile", s.auth(s.updateProfile))
 	mux.HandleFunc("POST /profile/password", s.auth(s.updatePassword))
 	mux.HandleFunc("POST /profile/sessions/revoke-others", s.auth(s.revokeOtherSessions))
+	mux.HandleFunc("GET /onboarding", s.auth(s.onboardingPage))
+	mux.HandleFunc("POST /onboarding/skip", s.auth(s.skipOnboarding))
+	mux.HandleFunc("GET /search", s.auth(s.searchPage))
+	mux.HandleFunc("GET /search/results", s.auth(s.searchResults))
+	mux.HandleFunc("GET /me/coaching", s.auth(s.coachingPage))
+	mux.HandleFunc("GET /me/growth", s.auth(s.growthPage))
+	mux.HandleFunc("GET /me/grades", s.auth(s.gradesPage))
 	if s.notificationsEnabled {
 		mux.HandleFunc("GET /settings", s.auth(s.settingsPage))
 		mux.HandleFunc("POST /settings", s.auth(s.updateSettings))
@@ -395,6 +408,14 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		s.render(w, "landing", pd)
 		return
 	}
+	// First-run onboarding: a newly registered user (no `users.onboarded_at`)
+	// gets routed to the explainer page on their first visit to the
+	// dashboard. The page itself is skippable so we never trap anyone
+	// behind it.
+	if !u.Onboarded {
+		http.Redirect(w, r, "/onboarding", http.StatusSeeOther)
+		return
+	}
 	if s.store.CanCreateRooms(u.ID) || s.store.IsMentor(u.ID) {
 		dash, err := s.store.MentorDashboard(u.ID)
 		if err != nil {
@@ -453,6 +474,13 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.serverError(w, err)
 		return
+	}
+	// The first user who runs /setup is by definition the operator —
+	// they just typed a name/email/password into the bootstrap form, so
+	// the explainer page would be condescending. Mark them onboarded
+	// immediately. Onboarding stays on for everyone who arrives via /join.
+	if err := s.store.MarkOnboarded(uid); err != nil {
+		log.Printf("mark setup user onboarded uid=%s: %v", uid, err)
 	}
 	// Carry the pre-login language choice (if any) to the new user.
 	s.persistLangChoice(r, uid)
@@ -1577,4 +1605,124 @@ func (s *Server) deleteAssignment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
+// onboardingPage renders the first-run explainer for users who haven't
+// yet been stamped with `onboarded_at`. The page itself doesn't gate
+// anything — it always offers a Skip action that just marks the user
+// onboarded and redirects to /.
+func (s *Server) onboardingPage(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	if u.Onboarded {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	pd := s.pageData(r, "title.onboarding")
+	pd.SetupNeeded = s.store.CanCreateRooms(u.ID)
+	s.render(w, "onboarding", pd)
+}
+
+func (s *Server) skipOnboarding(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	if err := s.store.MarkOnboarded(u.ID); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// searchPage renders the search shell + (if `q` is present) the result
+// list inline. /search/results is the htmx target the topbar input
+// posts to so typing doesn't reload the chrome.
+func (s *Server) searchPage(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	q := auth.Clean(r.URL.Query().Get("q"), 200)
+	pd := s.pageData(r, "title.search")
+	pd.SearchQuery = q
+	if q != "" {
+		hits, err := s.store.Search(u.ID, q, 40)
+		if err != nil {
+			s.serverError(w, err)
+			return
+		}
+		pd.SearchHits = hits
+	}
+	s.render(w, "search", pd)
+}
+
+// searchResults is the htmx-target endpoint: same query as searchPage
+// but renders only the result list partial so the topbar input can
+// stream results without a full reload.
+func (s *Server) searchResults(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	q := auth.Clean(r.URL.Query().Get("q"), 200)
+	pd := s.pageData(r, "")
+	pd.SearchQuery = q
+	if q != "" {
+		hits, err := s.store.Search(u.ID, q, 40)
+		if err != nil {
+			s.serverError(w, err)
+			return
+		}
+		pd.SearchHits = hits
+	}
+	s.render(w, "search_results", pd)
+}
+
+func (s *Server) coachingPage(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	if !s.store.IsMentor(u.ID) && !s.store.CanCreateRooms(u.ID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	window := parseWindowDays(r.URL.Query().Get("window"), 30)
+	metrics, err := s.store.CoachMetrics(u.ID, window)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	pd := s.pageData(r, "title.coaching")
+	pd.CoachMetrics = metrics
+	pd.WindowDays = window
+	s.render(w, "coaching", pd)
+}
+
+func (s *Server) growthPage(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	growth, err := s.store.GrowthMetrics(u.ID, 12)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	pd := s.pageData(r, "title.growth")
+	pd.Growth = growth
+	s.render(w, "growth", pd)
+}
+
+func (s *Server) gradesPage(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	rooms, err := s.store.StudentGrades(u.ID)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	pd := s.pageData(r, "title.grades")
+	pd.GradeRooms = rooms
+	s.render(w, "grades", pd)
+}
+
+// parseWindowDays parses the `window` query string for self-metric
+// pages; accepts 30 / 90 / 365 (1y) and falls back to def. The /me/*
+// pages all use the same convention so the period switcher is shared
+// across templates.
+func parseWindowDays(raw string, def int) int {
+	switch raw {
+	case "30":
+		return 30
+	case "90":
+		return 90
+	case "365":
+		return 365
+	}
+	return def
 }

@@ -1,6 +1,10 @@
 package domain
 
-import "database/sql"
+import (
+	"database/sql"
+	"html/template"
+	"strings"
+)
 
 const (
 	RoleMentor = "mentor"
@@ -29,6 +33,7 @@ type User struct {
 	Email             string
 	Language          string
 	EngagementEnabled bool
+	Onboarded         bool
 }
 
 type Room struct {
@@ -317,6 +322,86 @@ type RoomData struct {
 	MyRank      Rank
 }
 
+// CoachMetrics is the data behind /me/coaching. Pure read-model, computed
+// from existing rows in a single query bundle. Active vs lapsed mentees
+// uses a 14-day no-activity threshold.
+type CoachMetrics struct {
+	WindowDays               int
+	CommentsLeft             int
+	SubmissionsReviewed      int
+	SubmissionsTotal         int
+	AvgFirstCommentHours     float64
+	FirstCommentCount        int
+	ActiveMentees            int
+	LapsedMentees            int
+}
+
+// GrowthMetrics is the data behind /me/growth. Weeks is the last 12
+// ISO-week buckets of reports submitted (oldest first). Streak is the
+// consecutive count of weeks with at least one report ending at the
+// current ISO week. Topics is a small frequency table of distinct words
+// from learned/blocker fields, top-10 only.
+type GrowthMetrics struct {
+	Weeks       []WeekCount
+	Streak      int
+	TaskRate    float64 // 0..1 — done / (done + open) in the window
+	TaskDone    int
+	TaskOpen    int
+	Blockers    int
+	Topics      []TopicCount
+	ReportsAll  int
+	WindowWeeks int
+}
+
+type WeekCount struct {
+	Label string // "Apr 1" — Monday of the week
+	Count int
+}
+
+// HeightBucket maps a raw count to one of 11 CSS classes (h-0..h-10) used
+// by the sparkline. Inline style="height:..." would violate the strict
+// CSP, so the template emits class names and the stylesheet owns the
+// pixel values.
+func (w WeekCount) HeightBucket() int {
+	if w.Count >= 10 {
+		return 10
+	}
+	return w.Count
+}
+
+// TaskRatePct returns the task-completion rate as a 0..100 percentage,
+// suitable for direct interpolation into the localised "%.0f%%" string.
+func (g GrowthMetrics) TaskRatePct() float64 { return g.TaskRate * 100 }
+
+type TopicCount struct {
+	Word  string
+	Count int
+}
+
+// GradeRow is one assignment row in /me/grades, scoped to a single
+// student. Status is "on-time" | "late" | "missing" | "revise" |
+// "submitted" | "reviewed". Computed at query time from
+// submitted_at vs due_date.
+type GradeRow struct {
+	AssignmentID    string
+	AssignmentTitle string
+	DueDate         string
+	Status          string
+	Score           string
+	Feedback        string
+	SubmittedAt     string
+}
+
+type GradeRoom struct {
+	RoomID       string
+	RoomName     string
+	Rows         []GradeRow
+	AverageScore float64
+	ScoredCount  int
+	OnTimePct    float64
+	TotalCount   int
+}
+
 type MentorDashboard struct {
 	Rooms          []Room
 	Summary        DashboardSummary
@@ -353,6 +438,35 @@ type AttentionItem struct {
 	Detail    string
 	DueDate   string
 	CreatedAt string
+}
+
+// SearchHit is one row in the /search results. Kind tells the renderer
+// which DeepLink to build; Snippet is FTS5-generated HTML-safe text with
+// <mark>...</mark> around the match terms. RoomMode is included so the
+// label can be "Teacher" vs "Mentor" without an extra round-trip.
+type SearchHit struct {
+	Kind         string // "report" | "comment" | "task" | "assignment" | "submission"
+	ID           string
+	RoomID       string
+	RoomName     string
+	RoomMode     string
+	Title        string // resource title (assignment title, task title, "report by X", etc.)
+	Author       string
+	Snippet      string // user content, with \x02 / \x03 wrapping match terms
+	CreatedAt    string
+	DeepLinkPath string
+}
+
+// SafeSnippet returns the search snippet with user content HTML-escaped
+// and the FTS5 match markers (ASCII STX / ETX) swapped for <mark> tags.
+// The roundabout marker choice means we never trust raw user text and
+// never accidentally render their literal "<script>"; only the marker
+// pair becomes HTML.
+func (h SearchHit) SafeSnippet() template.HTML {
+	escaped := template.HTMLEscapeString(h.Snippet)
+	escaped = strings.ReplaceAll(escaped, "\x02", "<mark>")
+	escaped = strings.ReplaceAll(escaped, "\x03", "</mark>")
+	return template.HTML(escaped)
 }
 
 type MenteeProgress struct {

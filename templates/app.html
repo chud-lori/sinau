@@ -32,6 +32,9 @@
   </a>
   <nav>
     {{if .User}}
+      <form method="get" action="/search" class="topbar-search" role="search">
+        <input name="q" type="search" maxlength="200" value="{{.SearchQuery}}" placeholder="{{.T "nav.search"}}" aria-label="{{.T "nav.search"}}">
+      </form>
       <a class="user-chip" href="/profile">{{.User.Name}}</a>
       {{if gt .UserPoints 0}}<span class="pill point-chip" title="{{.T "nav.points.title"}}">{{.Tf "nav.points" .UserPoints}}</span>{{end}}
       {{if .NotificationsEnabled}}<a href="/settings">{{.T "nav.settings"}}</a>{{end}}
@@ -1068,6 +1071,15 @@
     <button type="submit"{{if le .SessionCount 1}} disabled{{end}}>{{.T "profile.sessions.revoke"}}</button>
   </form>
 </section>
+
+<section class="panel">
+  <div class="section-head"><div><p class="eyebrow">{{.T "profile.eyebrow"}}</p><h2>{{.T "profile.section.views"}}</h2></div></div>
+  <ul class="self-links">
+    <li><a href="/me/growth">{{.T "title.growth"}}</a> <span class="muted">— {{.T "growth.subtitle"}}</span></li>
+    <li><a href="/me/grades">{{.T "title.grades"}}</a> <span class="muted">— {{.T "grades.subtitle"}}</span></li>
+    <li><a href="/me/coaching">{{.T "title.coaching"}}</a> <span class="muted">— {{.T "coaching.subtitle"}}</span></li>
+  </ul>
+</section>
 {{template "layout_end" .}}{{end}}
 
 {{define "settings"}}{{template "layout_start" .}}
@@ -1170,5 +1182,210 @@
 <section class="panel help-section">
   <div class="section-head"><div><p class="eyebrow">{{.T "help.points.eyebrow"}}</p><h2>{{.T "help.points.title"}}</h2></div></div>
   <p>{{.T "help.points.body"}}</p>
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "onboarding"}}{{template "layout_start" .}}
+<section class="panel onboarding">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{.T "onboarding.eyebrow"}}</p>
+      <h1>{{.T "onboarding.title"}}</h1>
+    </div>
+  </div>
+  <p class="muted">{{.T "onboarding.intro"}}</p>
+  <div class="onboarding-paths">
+    {{if .SetupNeeded}}
+    <div class="panel onboarding-card">
+      <h2>{{.T "onboarding.mentor.title"}}</h2>
+      <p>{{.T "onboarding.mentor.body"}}</p>
+      <form method="post" action="/onboarding/skip">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <button type="submit" formaction="/onboarding/skip">{{.T "onboarding.mentor.cta"}}</button>
+      </form>
+    </div>
+    {{end}}
+    <div class="panel onboarding-card">
+      <h2>{{.T "onboarding.mentee.title"}}</h2>
+      <p>{{.T "onboarding.mentee.body"}}</p>
+      <a class="button secondary" href="/join">{{.T "onboarding.mentee.cta"}}</a>
+    </div>
+  </div>
+
+  <h2>{{.T "onboarding.tour.title"}}</h2>
+  <ol class="help-steps">
+    <li>{{.T "onboarding.tour.s1"}}</li>
+    <li>{{.T "onboarding.tour.s2"}}</li>
+    <li>{{.T "onboarding.tour.s3"}}</li>
+    <li>{{.T "onboarding.tour.s4"}}</li>
+  </ol>
+
+  <form method="post" action="/onboarding/skip" class="onboarding-skip">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button class="link" type="submit">{{.T "onboarding.skip"}}</button>
+  </form>
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "search"}}{{template "layout_start" .}}
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{.T "search.eyebrow"}}</p>
+      <h1>{{.T "search.title"}}</h1>
+    </div>
+  </div>
+  <p class="muted">{{.T "search.subtitle"}}</p>
+  <form method="get" action="/search" class="search-form" role="search">
+    <input name="q" type="search" maxlength="200" value="{{.SearchQuery}}" placeholder="{{.T "search.placeholder"}}" autofocus
+      hx-get="/search/results" hx-trigger="keyup changed delay:250ms, search" hx-target="#search-results" hx-swap="innerHTML"
+      hx-push-url="false">
+    <button type="submit">{{.T "search.submit"}}</button>
+  </form>
+  <div id="search-results">
+    {{template "search_results" .}}
+  </div>
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "search_results"}}{{if .SearchQuery}}
+  {{if .SearchHits}}
+    <ol class="search-list">
+      {{range .SearchHits}}
+        <li class="search-hit">
+          <a href="{{.DeepLinkPath}}">
+            <div class="search-meta"><span class="pill">{{$.T (printf "search.kind.%s" .Kind)}}</span><span class="muted">{{.RoomName}} · {{.CreatedAt}}</span></div>
+            <strong>{{.Title}}</strong>
+            <p class="search-snippet">{{.SafeSnippet}}</p>
+          </a>
+        </li>
+      {{end}}
+    </ol>
+  {{else}}
+    <p class="muted">{{.T "search.no_results"}}</p>
+  {{end}}
+{{else}}
+  <p class="muted">{{.T "search.empty.prompt"}}</p>
+{{end}}{{end}}
+
+{{define "coaching"}}{{template "layout_start" .}}
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{.T "coaching.eyebrow"}}</p>
+      <h1>{{.T "coaching.title"}}</h1>
+    </div>
+  </div>
+  <p class="muted">{{.T "coaching.subtitle"}}</p>
+  <nav class="window-picker">
+    <a {{if eq .WindowDays 30}}class="active"{{end}} href="/me/coaching?window=30">{{.T "coaching.window.30"}}</a>
+    <a {{if eq .WindowDays 90}}class="active"{{end}} href="/me/coaching?window=90">{{.T "coaching.window.90"}}</a>
+    <a {{if eq .WindowDays 365}}class="active"{{end}} href="/me/coaching?window=365">{{.T "coaching.window.365"}}</a>
+  </nav>
+  {{if and (eq .CoachMetrics.CommentsLeft 0) (eq .CoachMetrics.SubmissionsTotal 0)}}
+    <div class="empty-inline"><p class="muted">{{.T "coaching.empty"}}</p></div>
+  {{else}}
+  <div class="metric-grid">
+    <div class="metric-card"><span>{{.T "coaching.metric.comments"}}</span><strong>{{.CoachMetrics.CommentsLeft}}</strong></div>
+    <div class="metric-card"><span>{{.T "coaching.metric.reviewed"}}</span><strong>{{.Tf "coaching.metric.reviewed.fraction" .CoachMetrics.SubmissionsReviewed .CoachMetrics.SubmissionsTotal}}</strong></div>
+    <div class="metric-card">
+      <span>{{.T "coaching.metric.first"}}</span>
+      <strong>{{if gt .CoachMetrics.FirstCommentCount 0}}{{printf "%.1f" .CoachMetrics.AvgFirstCommentHours}}h{{else}}—{{end}}</strong>
+      <p class="muted">{{.Tf "coaching.metric.first.help" .CoachMetrics.FirstCommentCount}}</p>
+    </div>
+    <div class="metric-card good"><span>{{.T "coaching.metric.active"}}</span><strong>{{.CoachMetrics.ActiveMentees}}</strong></div>
+    <div class="metric-card warn">
+      <span>{{.T "coaching.metric.lapsed"}}</span>
+      <strong>{{.CoachMetrics.LapsedMentees}}</strong>
+      <p class="muted">{{.T "coaching.metric.lapsed.help"}}</p>
+    </div>
+  </div>
+  {{end}}
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "growth"}}{{template "layout_start" .}}
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{.T "growth.eyebrow"}}</p>
+      <h1>{{.T "growth.title"}}</h1>
+    </div>
+  </div>
+  <p class="muted">{{.T "growth.subtitle"}}</p>
+  <h2>{{.T "growth.weeks.title"}}</h2>
+  {{if .Growth.Weeks}}
+    <ul class="sparkline" aria-label="{{.T "growth.weeks.title"}}">
+      {{range .Growth.Weeks}}<li><span class="bar h-{{.HeightBucket}}" title="{{.Label}}: {{.Count}}"></span><span class="bar-label">{{.Label}}</span></li>{{end}}
+    </ul>
+  {{else}}
+    <p class="muted">{{.T "growth.weeks.empty"}}</p>
+  {{end}}
+
+  <div class="metric-grid">
+    <div class="metric-card">
+      <span>{{.T "growth.streak.title"}}</span>
+      {{if gt .Growth.Streak 0}}
+        <strong>{{.Tf "growth.streak.value" .Growth.Streak}}</strong>
+      {{else}}
+        <strong>—</strong>
+        <p class="muted">{{.T "growth.streak.none"}}</p>
+      {{end}}
+    </div>
+    <div class="metric-card">
+      <span>{{.T "growth.tasks.title"}}</span>
+      <strong>{{.Tf "growth.tasks.rate" .Growth.TaskRatePct}}</strong>
+      <p class="muted">{{.Tf "growth.tasks.fraction" .Growth.TaskDone .Growth.TaskOpen}}</p>
+    </div>
+    <div class="metric-card">
+      <span>{{.T "growth.blockers.title"}}</span>
+      <strong>{{.Tf "growth.blockers.value" .Growth.Blockers}}</strong>
+    </div>
+  </div>
+
+  <h2>{{.T "growth.topics.title"}}</h2>
+  <p class="muted">{{.T "growth.topics.help"}}</p>
+  {{if .Growth.Topics}}
+    <ul class="topic-list">
+      {{range .Growth.Topics}}<li><span class="pill">{{.Word}}</span><span class="muted">×{{.Count}}</span></li>{{end}}
+    </ul>
+  {{else}}
+    <p class="muted">{{.T "growth.topics.empty"}}</p>
+  {{end}}
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "grades"}}{{template "layout_start" .}}
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{.T "grades.eyebrow"}}</p>
+      <h1>{{.T "grades.title"}}</h1>
+    </div>
+  </div>
+  <p class="muted">{{.T "grades.subtitle"}}</p>
+  {{range .GradeRooms}}
+    <article class="panel grade-room">
+      <h2>{{.RoomName}}</h2>
+      <p class="muted">
+        {{if gt .ScoredCount 0}}{{$.Tf "grades.average" .AverageScore}} · {{$.Tf "grades.scored.count" .ScoredCount}}{{end}}
+        {{if gt .TotalCount 0}}{{if gt .ScoredCount 0}} · {{end}}{{$.Tf "grades.ontime" .OnTimePct}}{{end}}
+      </p>
+      <div class="grade-table">
+        <div class="table-head"><span>{{$.T "grades.col.title"}}</span><span>{{$.T "grades.col.due"}}</span><span>{{$.T "grades.col.status"}}</span><span>{{$.T "grades.col.score"}}</span><span>{{$.T "grades.col.feedback"}}</span></div>
+        {{range .Rows}}
+          <div class="grade-row">
+            <strong>{{.AssignmentTitle}}</strong>
+            <span>{{.DueDate}}</span>
+            <span class="status {{.Status}}">{{$.T (printf "grades.status.%s" .Status)}}</span>
+            <span>{{if .Score}}{{.Score}}{{else}}—{{end}}</span>
+            <span class="muted">{{.Feedback}}</span>
+          </div>
+        {{end}}
+      </div>
+    </article>
+  {{else}}
+    <div class="empty-inline"><strong>{{.T "grades.empty.title"}}</strong><p class="muted">{{.T "grades.empty.body"}}</p></div>
+  {{end}}
 </section>
 {{template "layout_end" .}}{{end}}
