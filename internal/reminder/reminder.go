@@ -59,6 +59,13 @@ type Recipient struct {
 type Notifier interface {
 	NotifyTaskDue(ctx context.Context, to Recipient, rem domain.TaskReminder) error
 	NotifyAssignmentDue(ctx context.Context, to Recipient, rem domain.AssignmentReminder) error
+	// NotifyEngagement delivers a non-deadline event (comment on a
+	// report, new submission, posted feedback). Fired from web
+	// handlers, not the worker, so retries/dedup are the caller's
+	// responsibility. Implementations should fall back to the log
+	// channel rather than returning errors for "not configured" cases,
+	// matching the contract used by NotifyTaskDue.
+	NotifyEngagement(ctx context.Context, to Recipient, ev EngagementEvent) error
 }
 
 // LogNotifier writes deadline reminders to the standard logger. It is the
@@ -75,6 +82,12 @@ func (LogNotifier) NotifyTaskDue(_ context.Context, to Recipient, rem domain.Tas
 func (LogNotifier) NotifyAssignmentDue(_ context.Context, to Recipient, rem domain.AssignmentReminder) error {
 	log.Printf("reminder via=log kind=assignment channel=%s assignment=%q due=%s class=%q to=%q email=%s",
 		to.Channel, rem.Title, rem.DueDate, rem.RoomName, to.Name, to.Email)
+	return nil
+}
+
+func (LogNotifier) NotifyEngagement(_ context.Context, to Recipient, ev EngagementEvent) error {
+	log.Printf("engagement via=log kind=%s channel=%s actor=%q room=%q title=%q to=%q email=%s",
+		ev.Kind, to.Channel, ev.ActorName, ev.RoomName, ev.Title, to.Name, to.Email)
 	return nil
 }
 

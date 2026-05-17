@@ -58,13 +58,23 @@ func TestSchemaV1HasFinalShape(t *testing.T) {
 	}{
 		{"users", "language"},
 		{"users", "can_create_rooms"},
+		{"users", "engagement_notif_enabled"},
+		{"sessions", "created_at"},
 		{"rooms", "mode"},
 		{"rooms", "leaderboard_visible"},
+		{"reports", "edited_at"},
+		{"reports", "deleted_at"},
+		{"comments", "edited_at"},
+		{"comments", "deleted_at"},
 		{"tasks", "due_date"},
 		{"tasks", "last_reminded_at"},
 		{"tasks", "points_awarded"},
 		{"tasks", "reviewed_at"},
+		{"tasks", "edited_at"},
+		{"tasks", "deleted_at"},
 		{"assignments", "last_reminded_at"},
+		{"assignments", "edited_at"},
+		{"assignments", "deleted_at"},
 		{"submissions", "score"},
 		{"notification_prefs", "whatsapp_number"},
 		{"notification_prefs", "telegram_chat_id"},
@@ -261,7 +271,7 @@ func TestClassroomAssignmentsCanBeSubmittedAndReviewed(t *testing.T) {
 	code := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
 	menteeID, _ := joinMentee(t, st, code, "Student", "student@example.com")
 
-	if err := st.CreateAssignment(roomID, mentorID, "Build notebook", "Train a small model", "https://docs.google.com/doc", "2026-06-01"); err != nil {
+	if _, err := st.CreateAssignment(roomID, mentorID, "Build notebook", "Train a small model", "https://docs.google.com/doc", "2026-06-01"); err != nil {
 		t.Fatal(err)
 	}
 	studentAssignments, err := st.Assignments(roomID, menteeID, domain.RoleMentee)

@@ -413,5 +413,72 @@ func init() {
 		"notif.assignment_due.instructions": "Petunjuk:",
 		"notif.assignment_due.footer":       "Buka Sinau untuk mengumpulkan tugas.",
 		"notif.assignment_due.short":        "Pengingat Sinau: tugas kelas %q di %q jatuh tempo %s.",
+
+		// Engagement notifications — shared body chrome
+		"notif.engagement.greeting": "Halo %s,",
+		"notif.engagement.snippet":  "Yang ditulis:",
+		"notif.engagement.footer":   "Buka Sinau untuk balas atau lanjut bahas.",
+		// Report comment
+		"notif.report_comment.subject": "Sinau: %s comment di laporan kamu di %q",
+		"notif.report_comment.body":    "%s baru ninggalin comment di laporan kamu di %q.",
+		// Submission received (teacher-facing)
+		"notif.submission_made.subject": "Sinau: %s submit %q",
+		"notif.submission_made.body":    "%s baru submit %q di kelas %q kamu.",
+		// Feedback posted (student-facing)
+		"notif.feedback_posted.subject":    "Sinau: feedback siap di %q",
+		"notif.feedback_posted.body":       "Guru kamu udah kasih feedback di %q.",
+		"notif.feedback_posted.body_score": "Guru kamu udah kasih feedback di %q. Skor: %s.",
+
+		// Topbar
+		"nav.profile": "Profil",
+
+		// Profile page
+		"title.profile":         "Profil",
+		"title.report.edit":     "Edit laporan",
+		"title.task.edit":       "Edit tugas",
+		"title.assignment.edit": "Edit tugas kelas",
+		"profile.eyebrow":       "Akun",
+		"profile.title":         "Akun kamu",
+		"profile.subtitle":      "Atur tampilan kamu di Sinau dan ke mana notifikasi dikirim.",
+		"profile.section.basics":   "Profil",
+		"profile.section.password": "Password",
+		"profile.section.notif":    "Notifikasi",
+		"profile.section.sessions": "Sesi aktif",
+		"profile.field.name":       "Nama tampil",
+		"profile.field.email":      "Email",
+		"profile.field.language":   "Bahasa",
+		"profile.engagement":       "Kirim email kalau ada yang comment, submit, atau kasih feedback",
+		"profile.engagement.help":  "Pengingat deadline tetap ikut setting di halaman Notifikasi.",
+		"profile.submit":           "Simpan profil",
+		"profile.password.current": "Password sekarang",
+		"profile.password.new":     "Password baru",
+		"profile.password.submit":  "Ganti password",
+		"profile.password.help":    "Ganti password akan logout otomatis dari device lain.",
+		"profile.sessions.count":   "%d sesi aktif — termasuk yang sekarang.",
+		"profile.sessions.revoke":  "Logout dari device lain",
+		"profile.saved":            "Profil tersimpan.",
+		"profile.password.saved":   "Password berhasil diganti. Device lain otomatis logout.",
+		"profile.sessions.revoked": "Sesi lain berhasil di-logout.",
+		"profile.error.invalid":    "Pastikan nama, email, dan bahasa valid.",
+		"profile.error.email_taken": "Email ini udah dipakai akun lain.",
+		"profile.password.error.current": "Password sekarang nggak cocok.",
+		"profile.password.error.new":     "Password baru minimal 12 karakter.",
+
+		// Edit / delete shared
+		"action.edit":            "Edit",
+		"action.delete":          "Hapus",
+		"action.delete.confirm":  "Yakin mau hapus?",
+		"action.cancel":          "Batal",
+		"action.save":            "Simpan perubahan",
+		"edited.indicator":       "diedit",
+		"edited.indicator.with":  "diedit %s",
+		"report.edit.eyebrow":    "Edit laporan",
+		"report.edit.title":      "Update check-in kamu",
+		"task.edit.eyebrow":      "Edit tugas",
+		"task.edit.title":        "Update tugas",
+		"assignment.edit.eyebrow": "Edit tugas kelas",
+		"assignment.edit.title":   "Update tugas kelas",
+		"comment.edit.placeholder": "Edit comment kamu",
+		"comment.edit.save":       "Simpan comment",
 	})
 }

@@ -82,13 +82,15 @@ var schemaV1 = []string{
 		password_hash TEXT NOT NULL,
 		can_create_rooms INTEGER NOT NULL DEFAULT 0,
 		language TEXT NOT NULL DEFAULT 'en',
+		engagement_notif_enabled INTEGER NOT NULL DEFAULT 1,
 		created_at TEXT NOT NULL
 	)`,
 	`CREATE TABLE IF NOT EXISTS sessions (
 		id_hash TEXT PRIMARY KEY,
 		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 		csrf TEXT NOT NULL,
-		expires_at TEXT NOT NULL
+		expires_at TEXT NOT NULL,
+		created_at TEXT NOT NULL DEFAULT ''
 	)`,
 	`CREATE TABLE IF NOT EXISTS rooms (
 		id TEXT PRIMARY KEY,
@@ -122,7 +124,9 @@ var schemaV1 = []string{
 		practiced TEXT NOT NULL,
 		blocker TEXT NOT NULL,
 		next_plan TEXT NOT NULL,
-		created_at TEXT NOT NULL
+		created_at TEXT NOT NULL,
+		edited_at TEXT NOT NULL DEFAULT '',
+		deleted_at TEXT NOT NULL DEFAULT ''
 	)`,
 	`CREATE TABLE IF NOT EXISTS report_links (
 		id TEXT PRIMARY KEY,
@@ -137,7 +141,9 @@ var schemaV1 = []string{
 		report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
 		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 		body TEXT NOT NULL,
-		created_at TEXT NOT NULL
+		created_at TEXT NOT NULL,
+		edited_at TEXT NOT NULL DEFAULT '',
+		deleted_at TEXT NOT NULL DEFAULT ''
 	)`,
 	`CREATE TABLE IF NOT EXISTS tasks (
 		id TEXT PRIMARY KEY,
@@ -153,7 +159,9 @@ var schemaV1 = []string{
 		reviewed_at TEXT NOT NULL DEFAULT '',
 		reviewed_by TEXT NOT NULL DEFAULT '',
 		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL
+		updated_at TEXT NOT NULL,
+		edited_at TEXT NOT NULL DEFAULT '',
+		deleted_at TEXT NOT NULL DEFAULT ''
 	)`,
 	`CREATE TABLE IF NOT EXISTS assignments (
 		id TEXT PRIMARY KEY,
@@ -164,7 +172,9 @@ var schemaV1 = []string{
 		resource_url TEXT NOT NULL,
 		due_date TEXT NOT NULL,
 		last_reminded_at TEXT NOT NULL DEFAULT '',
-		created_at TEXT NOT NULL
+		created_at TEXT NOT NULL,
+		edited_at TEXT NOT NULL DEFAULT '',
+		deleted_at TEXT NOT NULL DEFAULT ''
 	)`,
 	`CREATE TABLE IF NOT EXISTS submissions (
 		id TEXT PRIMARY KEY,
@@ -315,7 +325,8 @@ func (s *Store) UserPasswordByEmail(email string) (string, string, error) {
 }
 
 func (s *Store) CreateSession(userID, token, csrf string, expires time.Time) error {
-	_, err := s.db.Exec(`INSERT INTO sessions(id_hash,user_id,csrf,expires_at) VALUES(?,?,?,?)`, auth.HashToken(token), userID, csrf, expires.UTC().Format(time.RFC3339))
+	_, err := s.db.Exec(`INSERT INTO sessions(id_hash,user_id,csrf,expires_at,created_at) VALUES(?,?,?,?,?)`,
+		auth.HashToken(token), userID, csrf, expires.UTC().Format(time.RFC3339), auth.Now())
 	return err
 }
 
@@ -327,9 +338,10 @@ func (s *Store) DeleteSession(token string) error {
 func (s *Store) CurrentUser(token string) (*domain.User, error) {
 	var u domain.User
 	var expires string
-	err := s.db.QueryRow(`SELECT u.id, u.name, u.email, u.language, s.expires_at
+	var engagement int
+	err := s.db.QueryRow(`SELECT u.id, u.name, u.email, u.language, u.engagement_notif_enabled, s.expires_at
 		FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.id_hash = ?`, auth.HashToken(token)).Scan(&u.ID, &u.Name, &u.Email, &u.Language, &expires)
+		WHERE s.id_hash = ?`, auth.HashToken(token)).Scan(&u.ID, &u.Name, &u.Email, &u.Language, &engagement, &expires)
 	if err != nil {
 		return nil, err
 	}
@@ -337,6 +349,22 @@ func (s *Store) CurrentUser(token string) (*domain.User, error) {
 		_ = s.DeleteSession(token)
 		return nil, errors.New("expired session")
 	}
+	u.EngagementEnabled = engagement == 1
+	return &u, nil
+}
+
+// UserByID returns the full profile record. Used by /profile so the page
+// can render current name/email/language/engagement-toggle without
+// touching the session row.
+func (s *Store) UserByID(userID string) (*domain.User, error) {
+	var u domain.User
+	var engagement int
+	err := s.db.QueryRow(`SELECT id, name, email, language, engagement_notif_enabled FROM users WHERE id = ?`,
+		userID).Scan(&u.ID, &u.Name, &u.Email, &u.Language, &engagement)
+	if err != nil {
+		return nil, err
+	}
+	u.EngagementEnabled = engagement == 1
 	return &u, nil
 }
 
@@ -345,6 +373,80 @@ func (s *Store) CurrentUser(token string) (*domain.User, error) {
 func (s *Store) SetUserLanguage(userID, language string) error {
 	_, err := s.db.Exec(`UPDATE users SET language = ? WHERE id = ?`, language, userID)
 	return err
+}
+
+// ErrEmailTaken is returned by UpdateUserProfile when the email conflicts
+// with another account's. Callers re-render the form with this hint
+// instead of leaking a database-level error.
+var ErrEmailTaken = errors.New("email already in use")
+
+// UpdateUserProfile mutates the four user-controlled profile fields in one
+// statement. Email collisions surface as ErrEmailTaken so the handler can
+// distinguish them from generic errors. Caller validates inputs (name
+// non-empty, email well-formed, language supported).
+func (s *Store) UpdateUserProfile(userID, name, email, language string, engagementEnabled bool) error {
+	e := 0
+	if engagementEnabled {
+		e = 1
+	}
+	_, err := s.db.Exec(`UPDATE users SET name = ?, email = ?, language = ?, engagement_notif_enabled = ? WHERE id = ?`,
+		name, email, language, e, userID)
+	if err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed: users.email") {
+		return ErrEmailTaken
+	}
+	return err
+}
+
+// UserPasswordHash returns the current argon2id hash for the user. Used
+// by /profile/password to verify the current password before accepting a
+// new one.
+func (s *Store) UserPasswordHash(userID string) (string, error) {
+	var hash string
+	err := s.db.QueryRow(`SELECT password_hash FROM users WHERE id = ?`, userID).Scan(&hash)
+	return hash, err
+}
+
+// UpdateUserPassword stores a new argon2id hash and revokes every other
+// active session for the user in one transaction, so a credential
+// rotation immediately ejects any session that might already be
+// compromised. The current session token must be passed so the caller
+// stays signed in.
+func (s *Store) UpdateUserPassword(userID, newHash, keepToken string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, newHash, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM sessions WHERE user_id = ? AND id_hash != ?`,
+		userID, auth.HashToken(keepToken)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// UserSessionCount returns the number of currently-active sessions for
+// the user (expired rows are excluded so the /profile UI shows what the
+// user actually has). Used by the "Sign out other sessions" affordance.
+func (s *Store) UserSessionCount(userID string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE user_id = ? AND expires_at > ?`,
+		userID, auth.Now()).Scan(&n)
+	return n, err
+}
+
+// RevokeOtherSessions deletes every session for the user except the one
+// matching keepToken. Returns the number of sessions revoked.
+func (s *Store) RevokeOtherSessions(userID, keepToken string) (int, error) {
+	res, err := s.db.Exec(`DELETE FROM sessions WHERE user_id = ? AND id_hash != ?`,
+		userID, auth.HashToken(keepToken))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 func (s *Store) CSRF(token string) string {
@@ -459,15 +561,15 @@ func (s *Store) mentorSummary(userID string, mentees []domain.MenteeProgress) (d
 		{&out.ActiveMentees, `SELECT COUNT(DISTINCT ml.user_id) FROM memberships mr JOIN memberships ml ON ml.room_id = mr.room_id AND ml.role = 'mentee' WHERE mr.user_id = ? AND mr.role = 'mentor'`},
 		{&out.WaitingFeedback, `SELECT COUNT(*) FROM (
 			SELECT rp.id FROM memberships mr
-			JOIN reports rp ON rp.room_id = mr.room_id
-			LEFT JOIN comments c ON c.report_id = rp.id
+			JOIN reports rp ON rp.room_id = mr.room_id AND rp.deleted_at = ''
+			LEFT JOIN comments c ON c.report_id = rp.id AND c.deleted_at = ''
 			WHERE mr.user_id = ? AND mr.role = 'mentor'
 			GROUP BY rp.id HAVING COUNT(c.id) = 0)`},
-		{&out.Blockers, `SELECT COUNT(*) FROM memberships mr JOIN reports rp ON rp.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND rp.blocker != ''`},
-		{&out.OpenTasks, `SELECT COUNT(*) FROM memberships mr JOIN tasks t ON t.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done'`},
-		{&out.DueSoonTasks, `SELECT COUNT(*) FROM memberships mr JOIN tasks t ON t.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done' AND t.due_date != '' AND t.due_date >= date('now') AND t.due_date <= date('now', '+2 day')`},
-		{&out.OverdueTasks, `SELECT COUNT(*) FROM memberships mr JOIN tasks t ON t.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done' AND t.due_date != '' AND t.due_date < date('now')`},
-		{&out.ReportsThisWeek, `SELECT COUNT(*) FROM memberships mr JOIN reports rp ON rp.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND rp.created_at >= datetime('now', '-7 day')`},
+		{&out.Blockers, `SELECT COUNT(*) FROM memberships mr JOIN reports rp ON rp.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND rp.blocker != '' AND rp.deleted_at = ''`},
+		{&out.OpenTasks, `SELECT COUNT(*) FROM memberships mr JOIN tasks t ON t.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done' AND t.deleted_at = ''`},
+		{&out.DueSoonTasks, `SELECT COUNT(*) FROM memberships mr JOIN tasks t ON t.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done' AND t.deleted_at = '' AND t.due_date != '' AND t.due_date >= date('now') AND t.due_date <= date('now', '+2 day')`},
+		{&out.OverdueTasks, `SELECT COUNT(*) FROM memberships mr JOIN tasks t ON t.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done' AND t.deleted_at = '' AND t.due_date != '' AND t.due_date < date('now')`},
+		{&out.ReportsThisWeek, `SELECT COUNT(*) FROM memberships mr JOIN reports rp ON rp.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND rp.deleted_at = '' AND rp.created_at >= datetime('now', '-7 day')`},
 	}
 	for _, q := range queries {
 		if err := s.db.QueryRow(q.sql, userID).Scan(q.dst); err != nil {
@@ -487,7 +589,7 @@ func (s *Store) menteeDashboardTasks(userID string) ([]domain.Task, error) {
 			t.points_awarded, t.reviewed_at, t.reviewed_by
 		FROM tasks t
 		JOIN rooms r ON r.id = t.room_id
-		WHERE t.assigned_to = ? AND t.status != 'done'
+		WHERE t.assigned_to = ? AND t.status != 'done' AND t.deleted_at = ''
 		ORDER BY CASE WHEN t.due_date != '' AND t.due_date < date('now') THEN 0 WHEN t.due_date != '' THEN 1 ELSE 2 END, t.due_date ASC, t.created_at DESC
 		LIMIT 12`, userID)
 	if err != nil {
@@ -508,11 +610,12 @@ func (s *Store) menteeDashboardTasks(userID string) ([]domain.Task, error) {
 }
 
 func (s *Store) menteeRecentReports(userID string) ([]domain.Report, error) {
-	rows, err := s.db.Query(`SELECT rp.id, rp.room_id, rp.user_id, r.name, rp.learned, rp.practiced, rp.blocker, rp.next_plan, rp.created_at, COUNT(c.id)
+	rows, err := s.db.Query(`SELECT rp.id, rp.room_id, rp.user_id, r.name, rp.learned, rp.practiced, rp.blocker, rp.next_plan, rp.created_at, rp.edited_at,
+			SUM(CASE WHEN c.id IS NOT NULL AND c.deleted_at = '' THEN 1 ELSE 0 END)
 		FROM reports rp
 		JOIN rooms r ON r.id = rp.room_id
 		LEFT JOIN comments c ON c.report_id = rp.id
-		WHERE rp.user_id = ?
+		WHERE rp.user_id = ? AND rp.deleted_at = ''
 		GROUP BY rp.id
 		ORDER BY rp.created_at DESC
 		LIMIT 8`, userID)
@@ -523,7 +626,7 @@ func (s *Store) menteeRecentReports(userID string) ([]domain.Report, error) {
 	var out []domain.Report
 	for rows.Next() {
 		var r domain.Report
-		if err := rows.Scan(&r.ID, &r.RoomID, &r.UserID, &r.Author, &r.Learned, &r.Practiced, &r.Blocker, &r.NextPlan, &r.CreatedAt, &r.Comments); err != nil {
+		if err := rows.Scan(&r.ID, &r.RoomID, &r.UserID, &r.Author, &r.Learned, &r.Practiced, &r.Blocker, &r.NextPlan, &r.CreatedAt, &r.EditedAt, &r.Comments); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -611,21 +714,21 @@ func (s *Store) mentorAttention(userID string) ([]domain.AttentionItem, error) {
 		JOIN tasks t ON t.room_id = mr.room_id
 		JOIN rooms r ON r.id = t.room_id
 		JOIN users u ON u.id = t.assigned_to
-		WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done' AND t.due_date != '' AND t.due_date < date('now')
+		WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done' AND t.deleted_at = '' AND t.due_date != '' AND t.due_date < date('now')
 		UNION ALL
 		SELECT 'blocker', r.id, r.name, u.id, u.name, 'Blocked report', rp.blocker, '', rp.created_at
 		FROM memberships mr
 		JOIN reports rp ON rp.room_id = mr.room_id
 		JOIN rooms r ON r.id = rp.room_id
 		JOIN users u ON u.id = rp.user_id
-		WHERE mr.user_id = ? AND mr.role = 'mentor' AND rp.blocker != ''
+		WHERE mr.user_id = ? AND mr.role = 'mentor' AND rp.blocker != '' AND rp.deleted_at = ''
 		UNION ALL
 		SELECT 'feedback', r.id, r.name, u.id, u.name, 'Report needs feedback', rp.learned, '', rp.created_at
 		FROM memberships mr
-		JOIN reports rp ON rp.room_id = mr.room_id
+		JOIN reports rp ON rp.room_id = mr.room_id AND rp.deleted_at = ''
 		JOIN rooms r ON r.id = rp.room_id
 		JOIN users u ON u.id = rp.user_id
-		LEFT JOIN comments c ON c.report_id = rp.id
+		LEFT JOIN comments c ON c.report_id = rp.id AND c.deleted_at = ''
 		WHERE mr.user_id = ? AND mr.role = 'mentor'
 		GROUP BY rp.id
 		HAVING COUNT(c.id) = 0
@@ -648,11 +751,11 @@ func (s *Store) mentorAttention(userID string) ([]domain.AttentionItem, error) {
 
 func (s *Store) menteeProgress(userID string) ([]domain.MenteeProgress, error) {
 	rows, err := s.db.Query(`SELECT u.id, u.name, u.email, r.id, r.name,
-		COALESCE((SELECT MAX(rp.created_at) FROM reports rp WHERE rp.room_id = r.id AND rp.user_id = u.id), '') AS last_report,
-		(SELECT COUNT(*) FROM reports rp WHERE rp.room_id = r.id AND rp.user_id = u.id AND rp.created_at >= datetime('now', '-7 day')) AS reports_week,
-		(SELECT COUNT(*) FROM tasks t WHERE t.room_id = r.id AND t.assigned_to = u.id AND t.status != 'done') AS open_tasks,
-		(SELECT COUNT(*) FROM tasks t WHERE t.room_id = r.id AND t.assigned_to = u.id AND t.status != 'done' AND t.due_date != '' AND t.due_date < date('now')) AS overdue_tasks,
-		(SELECT COUNT(*) FROM reports rp WHERE rp.room_id = r.id AND rp.user_id = u.id AND rp.blocker != '') AS blockers
+		COALESCE((SELECT MAX(rp.created_at) FROM reports rp WHERE rp.room_id = r.id AND rp.user_id = u.id AND rp.deleted_at = ''), '') AS last_report,
+		(SELECT COUNT(*) FROM reports rp WHERE rp.room_id = r.id AND rp.user_id = u.id AND rp.deleted_at = '' AND rp.created_at >= datetime('now', '-7 day')) AS reports_week,
+		(SELECT COUNT(*) FROM tasks t WHERE t.room_id = r.id AND t.assigned_to = u.id AND t.status != 'done' AND t.deleted_at = '') AS open_tasks,
+		(SELECT COUNT(*) FROM tasks t WHERE t.room_id = r.id AND t.assigned_to = u.id AND t.status != 'done' AND t.deleted_at = '' AND t.due_date != '' AND t.due_date < date('now')) AS overdue_tasks,
+		(SELECT COUNT(*) FROM reports rp WHERE rp.room_id = r.id AND rp.user_id = u.id AND rp.deleted_at = '' AND rp.blocker != '') AS blockers
 		FROM memberships mr
 		JOIN rooms r ON r.id = mr.room_id
 		JOIN memberships ml ON ml.room_id = r.id AND ml.role = 'mentee'
@@ -734,10 +837,21 @@ func (s *Store) IsMentee(roomID, userID string) bool {
 // MenteeIDs returns every mentee user_id in the room, ordered by name for
 // stable display. Used by the "assign task to all mentees" flow.
 func (s *Store) MenteeIDs(roomID string) ([]string, error) {
+	return s.membersByRole(roomID, domain.RoleMentee)
+}
+
+// MentorIDs returns every mentor user_id in the room. Used to fan
+// engagement notifications (submission received) out to the whole
+// teaching side.
+func (s *Store) MentorIDs(roomID string) ([]string, error) {
+	return s.membersByRole(roomID, domain.RoleMentor)
+}
+
+func (s *Store) membersByRole(roomID, role string) ([]string, error) {
 	rows, err := s.db.Query(`SELECT m.user_id FROM memberships m
 		JOIN users u ON u.id = m.user_id
 		WHERE m.room_id = ? AND m.role = ?
-		ORDER BY u.name`, roomID, domain.RoleMentee)
+		ORDER BY u.name`, roomID, role)
 	if err != nil {
 		return nil, err
 	}
@@ -960,8 +1074,8 @@ func (s *Store) menteeScore(roomID, userID string) (domain.Rank, int, error) {
 
 func (s *Store) Members(roomID string) ([]domain.Member, error) {
 	rows, err := s.db.Query(`SELECT u.id, u.name, u.email, m.role, m.created_at,
-		COALESCE((SELECT MAX(r.created_at) FROM reports r WHERE r.room_id = m.room_id AND r.user_id = u.id), '') AS last_report,
-		(SELECT COUNT(*) FROM tasks t WHERE t.room_id = m.room_id AND t.assigned_to = u.id AND t.status != 'done') AS open_tasks
+		COALESCE((SELECT MAX(r.created_at) FROM reports r WHERE r.room_id = m.room_id AND r.user_id = u.id AND r.deleted_at = ''), '') AS last_report,
+		(SELECT COUNT(*) FROM tasks t WHERE t.room_id = m.room_id AND t.assigned_to = u.id AND t.status != 'done' AND t.deleted_at = '') AS open_tasks
 		FROM memberships m
 		JOIN users u ON u.id = m.user_id
 		WHERE m.room_id = ?
@@ -982,10 +1096,11 @@ func (s *Store) Members(roomID string) ([]domain.Member, error) {
 }
 
 func (s *Store) Reports(roomID, userID, role string) ([]domain.Report, error) {
-	query := `SELECT r.id, r.room_id, r.user_id, u.name, r.learned, r.practiced, r.blocker, r.next_plan, r.created_at, COUNT(c.id)
+	query := `SELECT r.id, r.room_id, r.user_id, u.name, r.learned, r.practiced, r.blocker, r.next_plan, r.created_at, r.edited_at,
+			SUM(CASE WHEN c.id IS NOT NULL AND c.deleted_at = '' THEN 1 ELSE 0 END)
 		FROM reports r JOIN users u ON u.id = r.user_id
 		LEFT JOIN comments c ON c.report_id = r.id
-		WHERE r.room_id = ?`
+		WHERE r.room_id = ? AND r.deleted_at = ''`
 	args := []any{roomID}
 	if role != domain.RoleMentor {
 		query += ` AND r.user_id = ?`
@@ -1000,7 +1115,7 @@ func (s *Store) Reports(roomID, userID, role string) ([]domain.Report, error) {
 	var out []domain.Report
 	for rows.Next() {
 		var r domain.Report
-		if err := rows.Scan(&r.ID, &r.RoomID, &r.UserID, &r.Author, &r.Learned, &r.Practiced, &r.Blocker, &r.NextPlan, &r.CreatedAt, &r.Comments); err != nil {
+		if err := rows.Scan(&r.ID, &r.RoomID, &r.UserID, &r.Author, &r.Learned, &r.Practiced, &r.Blocker, &r.NextPlan, &r.CreatedAt, &r.EditedAt, &r.Comments); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -1037,11 +1152,12 @@ func (s *Store) CreateReport(roomID, userID, learned, practiced, blocker, nextPl
 
 func (s *Store) ReportByID(roomID, reportID string) (domain.Report, error) {
 	var r domain.Report
-	err := s.db.QueryRow(`SELECT r.id, r.room_id, r.user_id, u.name, r.learned, r.practiced, r.blocker, r.next_plan, r.created_at, COUNT(c.id)
+	err := s.db.QueryRow(`SELECT r.id, r.room_id, r.user_id, u.name, r.learned, r.practiced, r.blocker, r.next_plan, r.created_at, r.edited_at,
+			SUM(CASE WHEN c.id IS NOT NULL AND c.deleted_at = '' THEN 1 ELSE 0 END)
 		FROM reports r JOIN users u ON u.id = r.user_id
 		LEFT JOIN comments c ON c.report_id = r.id
-		WHERE r.room_id = ? AND r.id = ?
-		GROUP BY r.id`, roomID, reportID).Scan(&r.ID, &r.RoomID, &r.UserID, &r.Author, &r.Learned, &r.Practiced, &r.Blocker, &r.NextPlan, &r.CreatedAt, &r.Comments)
+		WHERE r.room_id = ? AND r.id = ? AND r.deleted_at = ''
+		GROUP BY r.id`, roomID, reportID).Scan(&r.ID, &r.RoomID, &r.UserID, &r.Author, &r.Learned, &r.Practiced, &r.Blocker, &r.NextPlan, &r.CreatedAt, &r.EditedAt, &r.Comments)
 	if err != nil {
 		return r, err
 	}
@@ -1051,6 +1167,47 @@ func (s *Store) ReportByID(roomID, reportID string) (domain.Report, error) {
 	}
 	r.Links = groups[r.ID]
 	return r, nil
+}
+
+// UpdateReport overwrites the four free-text sections and replaces the
+// link list in a single transaction. edited_at is stamped on success so
+// the UI can show "edited <when>". Caller verifies the editor is the
+// author or a room mentor.
+func (s *Store) UpdateReport(reportID, learned, practiced, blocker, nextPlan string, links []domain.Link) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	now := auth.Now()
+	res, err := tx.Exec(`UPDATE reports SET learned = ?, practiced = ?, blocker = ?, next_plan = ?, edited_at = ?
+		WHERE id = ? AND deleted_at = ''`, learned, practiced, blocker, nextPlan, now, reportID)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return false, nil
+	}
+	if _, err := tx.Exec(`DELETE FROM report_links WHERE report_id = ?`, reportID); err != nil {
+		return false, err
+	}
+	if err := insertLinksTx(tx, "report_links", "report_id", reportID, links, now); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+// DeleteReport soft-deletes a report (and by visibility its comments,
+// since Comments() filters on the report-deletion path indirectly via
+// the report_id no longer being reachable from any view).
+func (s *Store) DeleteReport(reportID string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE reports SET deleted_at = ? WHERE id = ? AND deleted_at = ''`,
+		auth.Now(), reportID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
 }
 
 // insertLinksTx writes a slice of labelled links to the given child
@@ -1079,9 +1236,9 @@ func insertLinksTx(tx *sql.Tx, table, parentCol, parentID string, links []domain
 }
 
 func (s *Store) Comments(reportID string) ([]domain.Comment, error) {
-	rows, err := s.db.Query(`SELECT c.id, u.name, c.body, c.created_at
+	rows, err := s.db.Query(`SELECT c.id, c.user_id, u.name, c.body, c.created_at, c.edited_at
 		FROM comments c JOIN users u ON u.id = c.user_id
-		WHERE c.report_id = ? ORDER BY c.created_at`, reportID)
+		WHERE c.report_id = ? AND c.deleted_at = '' ORDER BY c.created_at`, reportID)
 	if err != nil {
 		return nil, err
 	}
@@ -1089,7 +1246,7 @@ func (s *Store) Comments(reportID string) ([]domain.Comment, error) {
 	var out []domain.Comment
 	for rows.Next() {
 		var c domain.Comment
-		if err := rows.Scan(&c.ID, &c.Author, &c.Body, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.AuthorID, &c.Author, &c.Body, &c.CreatedAt, &c.EditedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -1097,20 +1254,60 @@ func (s *Store) Comments(reportID string) ([]domain.Comment, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) CreateComment(reportID, userID, body string) error {
+// CreateComment inserts a discussion comment on a report and returns the
+// new ID so the caller (web handler) can fire engagement notifications
+// referencing it without re-querying.
+func (s *Store) CreateComment(reportID, userID, body string) (string, error) {
 	id, err := auth.NewID()
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = s.db.Exec(`INSERT INTO comments(id,report_id,user_id,body,created_at) VALUES(?,?,?,?,?)`, id, reportID, userID, body, auth.Now())
-	return err
+	if _, err := s.db.Exec(`INSERT INTO comments(id,report_id,user_id,body,created_at) VALUES(?,?,?,?,?)`,
+		id, reportID, userID, body, auth.Now()); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// CommentAuthor returns the author user_id of a non-deleted comment plus
+// the parent report_id. Used by permission checks on edit/delete.
+func (s *Store) CommentAuthor(commentID string) (userID, reportID string, err error) {
+	err = s.db.QueryRow(`SELECT user_id, report_id FROM comments WHERE id = ? AND deleted_at = ''`,
+		commentID).Scan(&userID, &reportID)
+	return
+}
+
+// EditComment overwrites the body and stamps edited_at. The caller is
+// expected to have verified that the editor is the author or a room
+// mentor. Returns (false, nil) when the comment is missing or already
+// deleted so the handler can render a 404.
+func (s *Store) EditComment(commentID, body string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE comments SET body = ?, edited_at = ? WHERE id = ? AND deleted_at = ''`,
+		body, auth.Now(), commentID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// DeleteComment soft-deletes a comment by stamping deleted_at. The row
+// stays in the table for audit but is excluded from Comments().
+func (s *Store) DeleteComment(commentID string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE comments SET deleted_at = ? WHERE id = ? AND deleted_at = ''`,
+		auth.Now(), commentID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
 }
 
 func (s *Store) Tasks(roomID, userID, role string) ([]domain.Task, error) {
-	query := `SELECT t.id, t.title, t.detail, t.status, u.name, u.id, t.due_date, t.created_at,
+	query := `SELECT t.id, t.title, t.detail, t.status, u.name, u.id, t.assigned_by, t.due_date, t.created_at, t.edited_at,
 			t.points_awarded, t.reviewed_at, t.reviewed_by
 		FROM tasks t JOIN users u ON u.id = t.assigned_to
-		WHERE t.room_id = ?`
+		WHERE t.room_id = ? AND t.deleted_at = ''`
 	args := []any{roomID}
 	if role != domain.RoleMentor {
 		query += ` AND t.assigned_to = ?`
@@ -1131,7 +1328,7 @@ func (s *Store) Tasks(roomID, userID, role string) ([]domain.Task, error) {
 	var out []domain.Task
 	for rows.Next() {
 		var t domain.Task
-		if err := rows.Scan(&t.ID, &t.Title, &t.Detail, &t.Status, &t.Assignee, &t.AssigneeID, &t.DueDate, &t.CreatedAt,
+		if err := rows.Scan(&t.ID, &t.Title, &t.Detail, &t.Status, &t.Assignee, &t.AssigneeID, &t.AssignedByID, &t.DueDate, &t.CreatedAt, &t.EditedAt,
 			&t.PointsAwarded, &t.ReviewedAt, &t.ReviewedBy); err != nil {
 			return nil, err
 		}
@@ -1139,6 +1336,59 @@ func (s *Store) Tasks(roomID, userID, role string) ([]domain.Task, error) {
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+// TaskRoomAndAssignee returns the (room, assignee) pair for a non-deleted
+// task. Used by edit/delete permission checks at the handler layer.
+func (s *Store) TaskRoomAndAssignee(taskID string) (roomID, assignedTo string, err error) {
+	err = s.db.QueryRow(`SELECT room_id, assigned_to FROM tasks WHERE id = ? AND deleted_at = ''`, taskID).
+		Scan(&roomID, &assignedTo)
+	return
+}
+
+// TaskByID loads a task for the edit form. Returns sql.ErrNoRows if the
+// row is missing, deleted, or already reviewed (since reviewed tasks
+// are no longer editable). Caller still verifies room membership.
+func (s *Store) TaskByID(roomID, taskID string) (domain.Task, error) {
+	var t domain.Task
+	err := s.db.QueryRow(`SELECT t.id, t.title, t.detail, t.status, u.name, u.id, t.assigned_by, t.due_date, t.created_at, t.edited_at,
+			t.points_awarded, t.reviewed_at, t.reviewed_by
+		FROM tasks t JOIN users u ON u.id = t.assigned_to
+		WHERE t.id = ? AND t.room_id = ? AND t.deleted_at = ''`, taskID, roomID).
+		Scan(&t.ID, &t.Title, &t.Detail, &t.Status, &t.Assignee, &t.AssigneeID, &t.AssignedByID, &t.DueDate, &t.CreatedAt, &t.EditedAt,
+			&t.PointsAwarded, &t.ReviewedAt, &t.ReviewedBy)
+	if err != nil {
+		return t, err
+	}
+	t.DueState = dueState(t.DueDate, t.Status, time.Now().UTC())
+	return t, nil
+}
+
+// UpdateTask mutates the editable task fields. reviewed_at = '' guards
+// against editing a task that's already been graded; once points are
+// awarded the content is locked. edited_at stamps the change.
+func (s *Store) UpdateTask(taskID, title, detail, dueDate string) (bool, error) {
+	now := auth.Now()
+	res, err := s.db.Exec(`UPDATE tasks SET title = ?, detail = ?, due_date = ?, edited_at = ?, updated_at = ?
+		WHERE id = ? AND deleted_at = '' AND reviewed_at = ''`, title, detail, dueDate, now, now, taskID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// DeleteTask soft-deletes a task. Once awarded points are present
+// (reviewed_at != '') deletion is rejected so a mentor cannot undo a
+// review by deleting the task and the ledger row in tandem.
+func (s *Store) DeleteTask(taskID string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE tasks SET deleted_at = ? WHERE id = ? AND deleted_at = '' AND reviewed_at = ''`,
+		auth.Now(), taskID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
 }
 
 func (s *Store) CreateTask(roomID, assignedTo, assignedBy, title, detail, dueDate string) error {
@@ -1215,7 +1465,7 @@ func (s *Store) Assignments(roomID, userID, role string) ([]domain.Assignment, e
 			roomID, domain.RoleMentee).Scan(&totalMentees); err != nil {
 			return nil, err
 		}
-		rows, err := s.db.Query(`SELECT a.id, a.room_id, a.title, a.instructions, a.resource_url, a.due_date, a.created_at,
+		rows, err := s.db.Query(`SELECT a.id, a.room_id, a.title, a.instructions, a.resource_url, a.due_date, a.created_at, a.edited_at,
 				COALESCE(sub.cnt, 0) AS submitted
 			FROM assignments a
 			LEFT JOIN (
@@ -1223,7 +1473,7 @@ func (s *Store) Assignments(roomID, userID, role string) ([]domain.Assignment, e
 				FROM submissions
 				GROUP BY assignment_id
 			) sub ON sub.assignment_id = a.id
-			WHERE a.room_id = ?
+			WHERE a.room_id = ? AND a.deleted_at = ''
 			ORDER BY CASE WHEN a.due_date != '' AND a.due_date < date('now') THEN 0 WHEN a.due_date != '' THEN 1 ELSE 2 END, a.due_date ASC, a.created_at DESC`, roomID)
 		if err != nil {
 			return nil, err
@@ -1232,7 +1482,7 @@ func (s *Store) Assignments(roomID, userID, role string) ([]domain.Assignment, e
 		var out []domain.Assignment
 		for rows.Next() {
 			var a domain.Assignment
-			if err := rows.Scan(&a.ID, &a.RoomID, &a.Title, &a.Instructions, &a.ResourceURL, &a.DueDate, &a.CreatedAt, &a.Submitted); err != nil {
+			if err := rows.Scan(&a.ID, &a.RoomID, &a.Title, &a.Instructions, &a.ResourceURL, &a.DueDate, &a.CreatedAt, &a.EditedAt, &a.Submitted); err != nil {
 				return nil, err
 			}
 			a.TotalMentees = totalMentees
@@ -1240,11 +1490,11 @@ func (s *Store) Assignments(roomID, userID, role string) ([]domain.Assignment, e
 		}
 		return out, rows.Err()
 	}
-	rows, err := s.db.Query(`SELECT a.id, a.room_id, a.title, a.instructions, a.resource_url, a.due_date, a.created_at,
+	rows, err := s.db.Query(`SELECT a.id, a.room_id, a.title, a.instructions, a.resource_url, a.due_date, a.created_at, a.edited_at,
 		COALESCE(sub.id, ''), COALESCE(sub.status, ''), COALESCE(sub.feedback, ''), COALESCE(sub.score, '')
 		FROM assignments a
 		LEFT JOIN submissions sub ON sub.assignment_id = a.id AND sub.student_id = ?
-		WHERE a.room_id = ?
+		WHERE a.room_id = ? AND a.deleted_at = ''
 		ORDER BY CASE
 			WHEN sub.status = 'revise' THEN 0
 			WHEN sub.status IS NULL AND a.due_date != '' AND a.due_date < date('now') THEN 1
@@ -1262,7 +1512,7 @@ func (s *Store) Assignments(roomID, userID, role string) ([]domain.Assignment, e
 	for rows.Next() {
 		var a domain.Assignment
 		var submissionID string
-		if err := rows.Scan(&a.ID, &a.RoomID, &a.Title, &a.Instructions, &a.ResourceURL, &a.DueDate, &a.CreatedAt, &submissionID, &a.MySubmissionStatus, &a.MyFeedback, &a.MyScore); err != nil {
+		if err := rows.Scan(&a.ID, &a.RoomID, &a.Title, &a.Instructions, &a.ResourceURL, &a.DueDate, &a.CreatedAt, &a.EditedAt, &submissionID, &a.MySubmissionStatus, &a.MyFeedback, &a.MyScore); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -1290,7 +1540,7 @@ func (s *Store) Submissions(roomID string) ([]domain.Submission, error) {
 		FROM submissions sub
 		JOIN assignments a ON a.id = sub.assignment_id
 		JOIN users u ON u.id = sub.student_id
-		WHERE a.room_id = ?
+		WHERE a.room_id = ? AND a.deleted_at = ''
 		ORDER BY CASE sub.status WHEN 'submitted' THEN 0 WHEN 'revise' THEN 1 ELSE 2 END, sub.submitted_at DESC`, roomID)
 	if err != nil {
 		return nil, err
@@ -1321,14 +1571,64 @@ func (s *Store) Submissions(roomID string) ([]domain.Submission, error) {
 	return out, nil
 }
 
-func (s *Store) CreateAssignment(roomID, createdBy, title, instructions, resourceURL, dueDate string) error {
+// CreateAssignment inserts a classroom assignment and returns its new
+// ID. Caller is responsible for validating dueDate format and ensuring
+// the room is in classroom mode.
+func (s *Store) CreateAssignment(roomID, createdBy, title, instructions, resourceURL, dueDate string) (string, error) {
 	id, err := auth.NewID()
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = s.db.Exec(`INSERT INTO assignments(id,room_id,created_by,title,instructions,resource_url,due_date,created_at)
-		VALUES(?,?,?,?,?,?,?,?)`, id, roomID, createdBy, title, instructions, resourceURL, dueDate, auth.Now())
-	return err
+	if _, err := s.db.Exec(`INSERT INTO assignments(id,room_id,created_by,title,instructions,resource_url,due_date,created_at)
+		VALUES(?,?,?,?,?,?,?,?)`, id, roomID, createdBy, title, instructions, resourceURL, dueDate, auth.Now()); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// AssignmentRoom returns the room_id of a non-deleted assignment. Used
+// by edit/delete permission checks. Returns sql.ErrNoRows when the
+// assignment is missing or already deleted.
+func (s *Store) AssignmentRoom(assignmentID string) (string, error) {
+	var roomID string
+	err := s.db.QueryRow(`SELECT room_id FROM assignments WHERE id = ? AND deleted_at = ''`, assignmentID).Scan(&roomID)
+	return roomID, err
+}
+
+// AssignmentByID loads an assignment for the teacher's edit form.
+// Returns sql.ErrNoRows when the row is missing or already deleted.
+func (s *Store) AssignmentByID(roomID, assignmentID string) (domain.Assignment, error) {
+	var a domain.Assignment
+	err := s.db.QueryRow(`SELECT id, room_id, title, instructions, resource_url, due_date, created_at, edited_at
+		FROM assignments WHERE id = ? AND room_id = ? AND deleted_at = ''`, assignmentID, roomID).
+		Scan(&a.ID, &a.RoomID, &a.Title, &a.Instructions, &a.ResourceURL, &a.DueDate, &a.CreatedAt, &a.EditedAt)
+	return a, err
+}
+
+// UpdateAssignment mutates the editable fields. edited_at is stamped so
+// the UI can show "edited <when>". Returns (false, nil) when the
+// assignment is missing or already deleted.
+func (s *Store) UpdateAssignment(assignmentID, title, instructions, resourceURL, dueDate string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE assignments SET title = ?, instructions = ?, resource_url = ?, due_date = ?, edited_at = ?
+		WHERE id = ? AND deleted_at = ''`, title, instructions, resourceURL, dueDate, auth.Now(), assignmentID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// DeleteAssignment soft-deletes a classroom assignment. Submissions
+// already attached stay in the DB but are hidden from Submissions()
+// since that query joins assignments and now filters deleted_at.
+func (s *Store) DeleteAssignment(assignmentID string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE assignments SET deleted_at = ? WHERE id = ? AND deleted_at = ''`,
+		auth.Now(), assignmentID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
 }
 
 // SubmitAssignment writes (or replaces) the mentee's submission for an
@@ -1389,6 +1689,16 @@ func (s *Store) SubmitAssignment(roomID, assignmentID, studentID, note string, l
 	return tx.Commit()
 }
 
+// SubmissionContext returns the student_id and assignment title for a
+// submission. Used by web handlers to fan an engagement notification
+// out to the student after a review is posted, without re-querying.
+func (s *Store) SubmissionContext(submissionID string) (studentID, assignmentTitle string, err error) {
+	err = s.db.QueryRow(`SELECT sub.student_id, a.title
+		FROM submissions sub JOIN assignments a ON a.id = sub.assignment_id
+		WHERE sub.id = ?`, submissionID).Scan(&studentID, &assignmentTitle)
+	return
+}
+
 // ReviewSubmission writes the teacher's review for a single submission.
 //
 // It is idempotent against accidental double-submits: the WHERE clause
@@ -1436,6 +1746,7 @@ func (s *Store) DueTaskReminders(now time.Time, window time.Duration) ([]domain.
 		JOIN rooms r ON r.id = t.room_id
 		JOIN users u ON u.id = t.assigned_to
 		WHERE t.status != 'done'
+		  AND t.deleted_at = ''
 		  AND t.due_date != ''
 		  AND t.due_date <= ?
 		  AND (t.last_reminded_at = '' OR t.last_reminded_at < ?)
@@ -1481,6 +1792,7 @@ func (s *Store) DueAssignmentReminders(now time.Time, window time.Duration) ([]d
 		JOIN users u ON u.id = m.user_id
 		LEFT JOIN submissions sub ON sub.assignment_id = a.id AND sub.student_id = u.id
 		WHERE sub.id IS NULL
+		  AND a.deleted_at = ''
 		  AND a.due_date != ''
 		  AND a.due_date <= ?
 		  AND (a.last_reminded_at = '' OR a.last_reminded_at < ?)

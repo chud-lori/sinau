@@ -32,7 +32,7 @@
   </a>
   <nav>
     {{if .User}}
-      <span class="user-chip">{{.User.Name}}</span>
+      <a class="user-chip" href="/profile">{{.User.Name}}</a>
       {{if gt .UserPoints 0}}<span class="pill point-chip" title="{{.T "nav.points.title"}}">{{.Tf "nav.points" .UserPoints}}</span>{{end}}
       {{if .NotificationsEnabled}}<a href="/settings">{{.T "nav.settings"}}</a>{{end}}
       <a href="/help">{{.T "nav.help"}}</a>
@@ -499,11 +499,18 @@
     {{range .Assignments}}
       <article class="assignment-card compact-card">
         <div class="item-head">
-          <div><strong>{{.Title}}</strong><p class="muted">{{$.Tf "room.due" .DueDate}}</p></div>
+          <div><strong>{{.Title}}</strong><p class="muted">{{$.Tf "room.due" .DueDate}}{{if .EditedAt}} · {{$.T "edited.indicator"}}{{end}}</p></div>
           <span class="pill">{{$.Tf "room.classroom.published.fraction" .Submitted .TotalMentees}}</span>
         </div>
         <p>{{.Instructions}}</p>
-        {{if .ResourceURL}}<p class="report-actions"><a href="{{.ResourceURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_resource"}}</a></p>{{end}}
+        <div class="report-actions edit-actions">
+          {{if .ResourceURL}}<a href="{{.ResourceURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_resource"}}</a>{{end}}
+          <a href="/rooms/{{$.Room.ID}}/assignments/{{.ID}}/edit">{{$.T "action.edit"}}</a>
+          <form method="post" action="/rooms/{{$.Room.ID}}/assignments/{{.ID}}/delete" class="inline-delete">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <button type="submit" class="link danger">{{$.T "action.delete"}}</button>
+          </form>
+        </div>
       </article>
     {{else}}
       <div class="empty-inline"><strong>{{.T "room.classroom.published.empty.title"}}</strong><p class="muted">{{.T "room.classroom.published.empty.body"}}</p></div>
@@ -629,7 +636,7 @@
         <div class="item-head">
           <div>
             <strong>{{.Author}}</strong>
-            <p class="muted">{{.CreatedAt}}</p>
+            <p class="muted">{{.CreatedAt}}{{if .EditedAt}} · {{$.Tf "edited.indicator.with" .EditedAt}}{{end}}</p>
           </div>
           <a class="comment-link" href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.Tf "room.comments" .Comments}}</a>
         </div>
@@ -638,6 +645,11 @@
         <div class="report-actions">
           {{range .Links}}<a href="{{.URL}}" rel="noreferrer" target="_blank">{{.Label}}</a>{{end}}
           <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.T "room.review_report"}}</a>
+          <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}/edit">{{$.T "action.edit"}}</a>
+          <form method="post" action="/rooms/{{$.Room.ID}}/reports/{{.ID}}/delete" class="inline-delete">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <button type="submit" class="link danger">{{$.T "action.delete"}}</button>
+          </form>
         </div>
       </article>
     {{else}}
@@ -659,7 +671,7 @@
           <span class="status {{.Status}}">{{.Status}}</span>
         </div>
         {{if .Detail}}<p>{{.Detail}}</p>{{end}}
-        <p class="muted">{{$.Tf "room.tasks.assigned_to" .Assignee}}</p>
+        <p class="muted">{{$.Tf "room.tasks.assigned_to" .Assignee}}{{if .EditedAt}} · {{$.T "edited.indicator"}}{{end}}</p>
         {{if .DueDate}}<p><span class="due-chip {{.DueState}}">{{$.T "room.due_chip"}} {{.DueDate}}</span></p>{{end}}
         {{if .ReviewedAt}}
           <p><span class="pill point-chip">{{$.Tf "room.tasks.awarded" .PointsAwarded}}</span></p>
@@ -673,6 +685,15 @@
             <button type="submit" name="points" value="4">4</button>
             <button type="submit" name="points" value="5" title="{{$.T "room.rubric.title5"}}">5</button>
           </form>
+        {{end}}
+        {{if not .ReviewedAt}}
+        <div class="report-actions edit-actions">
+          <a href="/rooms/{{$.Room.ID}}/tasks/{{.ID}}/edit">{{$.T "action.edit"}}</a>
+          <form method="post" action="/rooms/{{$.Room.ID}}/tasks/{{.ID}}/delete" class="inline-delete">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <button type="submit" class="link danger">{{$.T "action.delete"}}</button>
+          </form>
+        </div>
         {{end}}
       </article>
     {{else}}
@@ -825,7 +846,7 @@
       <div class="item-head">
         <div>
           <strong>{{.Author}}</strong>
-          <p class="muted">{{.CreatedAt}}</p>
+          <p class="muted">{{.CreatedAt}}{{if .EditedAt}} · {{$.Tf "edited.indicator.with" .EditedAt}}{{end}}</p>
         </div>
         <a class="comment-link" href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.Tf "room.comments" .Comments}}</a>
       </div>
@@ -834,6 +855,13 @@
       <div class="report-actions">
         {{range .Links}}<a href="{{.URL}}" rel="noreferrer" target="_blank">{{.Label}}</a>{{end}}
         <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.T "room.review_report"}}</a>
+        {{if eq .UserID $.User.ID}}
+          <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}/edit">{{$.T "action.edit"}}</a>
+          <form method="post" action="/rooms/{{$.Room.ID}}/reports/{{.ID}}/delete" class="inline-delete">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <button type="submit" class="link danger">{{$.T "action.delete"}}</button>
+          </form>
+        {{end}}
       </div>
     </article>
   {{else}}<div class="empty-inline"><strong>{{.T "room.reports.empty.mentee.title"}}</strong><p class="muted">{{.T "room.reports.empty.mentee.body"}}</p></div>{{end}}
@@ -856,7 +884,7 @@
     <div>
       <p class="eyebrow">{{.T "report.eyebrow"}}</p>
       <h1>{{.Report.Author}}</h1>
-      <p class="muted">{{.Report.CreatedAt}}</p>
+      <p class="muted">{{.Report.CreatedAt}}{{if .Report.EditedAt}} · {{.Tf "edited.indicator.with" .Report.EditedAt}}{{end}}</p>
     </div>
     {{if .Report.Blocker}}<span class="status attention">{{.T "report.status.blocked"}}</span>{{end}}
   </div>
@@ -867,6 +895,15 @@
     <section><h2>{{.T "report.h.next"}}</h2><p>{{.Report.NextPlan}}</p></section>
   </div>
   {{if .Report.Links}}<p class="report-actions">{{range .Report.Links}}<a href="{{.URL}}" rel="noreferrer" target="_blank">{{.Label}}</a>{{end}}</p>{{end}}
+  {{if or (eq .User.ID .Report.UserID) (eq .Room.Role "mentor")}}
+    <p class="report-actions edit-actions">
+      <a href="/rooms/{{.Room.ID}}/reports/{{.Report.ID}}/edit">{{.T "action.edit"}}</a>
+      <form method="post" action="/rooms/{{.Room.ID}}/reports/{{.Report.ID}}/delete" class="inline-delete">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <button type="submit" class="link danger" >{{.T "action.delete"}}</button>
+      </form>
+    </p>
+  {{end}}
 </section>
 <section class="panel">
   <div class="section-head">
@@ -875,11 +912,160 @@
       <h2>{{.T "report.comments.title"}}</h2>
     </div>
   </div>
-  {{range .Comments}}<article class="comment-card"><strong>{{.Author}}</strong><p>{{.Body}}</p><p class="muted">{{.CreatedAt}}</p></article>{{else}}<div class="empty-inline"><strong>{{.T "report.comments.empty.title"}}</strong><p class="muted">{{.T "report.comments.empty.body"}}</p></div>{{end}}
+  {{range .Comments}}<article class="comment-card">
+    <strong>{{.Author}}</strong>
+    <p>{{.Body}}</p>
+    <p class="muted">{{.CreatedAt}}{{if .EditedAt}} · {{$.Tf "edited.indicator.with" .EditedAt}}{{end}}</p>
+    {{if or (eq $.User.ID .AuthorID) (eq $.Room.Role "mentor")}}
+    <details class="comment-edit">
+      <summary>{{$.T "action.edit"}}</summary>
+      <form method="post" action="/rooms/{{$.Room.ID}}/reports/{{$.Report.ID}}/comments/{{.ID}}/edit" class="stack">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <textarea name="body" required placeholder="{{$.T "comment.edit.placeholder"}}">{{.Body}}</textarea>
+        <button type="submit">{{$.T "comment.edit.save"}}</button>
+      </form>
+    </details>
+    <form method="post" action="/rooms/{{$.Room.ID}}/reports/{{$.Report.ID}}/comments/{{.ID}}/delete" class="inline-delete">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <button type="submit" class="link danger" >{{$.T "action.delete"}}</button>
+    </form>
+    {{end}}
+  </article>{{else}}<div class="empty-inline"><strong>{{.T "report.comments.empty.title"}}</strong><p class="muted">{{.T "report.comments.empty.body"}}</p></div>{{end}}
   <form method="post" action="/rooms/{{.Room.ID}}/reports/{{.Report.ID}}/comments" class="stack">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>{{.T "form.comment"}} <textarea name="body" required placeholder="{{.T "report.comments.placeholder"}}"></textarea></label>
     <button type="submit">{{.T "report.comments.submit"}}</button>
+  </form>
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "report_edit"}}{{template "layout_start" .}}
+<p><a class="back-link" href="/rooms/{{.Room.ID}}/reports/{{.Report.ID}}">{{.Tf "report.back" .Room.Name}}</a></p>
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{.T "report.edit.eyebrow"}}</p>
+      <h2>{{.T "report.edit.title"}}</h2>
+    </div>
+  </div>
+  <form method="post" action="/rooms/{{.Room.ID}}/reports/{{.Report.ID}}/edit" class="stack">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>{{.T "form.learned"}} <textarea name="learned" required>{{.Report.Learned}}</textarea></label>
+    <label>{{.T "form.practiced"}} <textarea name="practiced" required>{{.Report.Practiced}}</textarea></label>
+    <label>{{.T "form.blocker"}} <textarea name="blocker">{{.Report.Blocker}}</textarea></label>
+    <label>{{.T "form.next_plan"}} <textarea name="next_plan" required>{{.Report.NextPlan}}</textarea></label>
+    <div class="links-field">
+      <p class="links-label">{{.T "form.links"}}</p>
+      <div id="report-links" class="links-list">
+        {{if .Report.Links}}
+          {{range .Report.Links}}<div class="link-row">
+            <input name="link_label" type="text" maxlength="120" value="{{.Label}}" placeholder="{{$.T "form.link_label_placeholder"}}" aria-label="{{$.T "form.link_label"}}">
+            <input name="link_url" type="url" maxlength="400" value="{{.URL}}" placeholder="https://..." aria-label="{{$.T "form.link_url"}}">
+          </div>{{end}}
+        {{else}}
+          {{template "link_row" .}}
+        {{end}}
+      </div>
+      <button type="button" class="link-add" hx-get="/partials/link-row" hx-target="#report-links" hx-swap="beforeend">{{.T "form.add_link"}}</button>
+    </div>
+    <div class="form-actions">
+      <button type="submit">{{.T "action.save"}}</button>
+      <a class="button secondary" href="/rooms/{{.Room.ID}}/reports/{{.Report.ID}}">{{.T "action.cancel"}}</a>
+    </div>
+  </form>
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "task_edit"}}{{template "layout_start" .}}
+<p><a class="back-link" href="/rooms/{{.Room.ID}}">{{.Tf "report.back" .Room.Name}}</a></p>
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{.T "task.edit.eyebrow"}}</p>
+      <h2>{{.T "task.edit.title"}}</h2>
+    </div>
+  </div>
+  <form method="post" action="/rooms/{{.Room.ID}}/tasks/{{.Task.ID}}/edit" class="stack">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>{{.T "form.title"}} <input name="title" required value="{{.Task.Title}}"></label>
+    <label>{{.T "form.detail"}} <textarea name="detail">{{.Task.Detail}}</textarea></label>
+    <label>{{.T "form.deadline"}} <input name="due_date" type="date" value="{{.Task.DueDate}}"></label>
+    <div class="form-actions">
+      <button type="submit">{{.T "action.save"}}</button>
+      <a class="button secondary" href="/rooms/{{.Room.ID}}">{{.T "action.cancel"}}</a>
+    </div>
+  </form>
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "assignment_edit"}}{{template "layout_start" .}}
+<p><a class="back-link" href="/rooms/{{.Room.ID}}">{{.Tf "report.back" .Room.Name}}</a></p>
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{.T "assignment.edit.eyebrow"}}</p>
+      <h2>{{.T "assignment.edit.title"}}</h2>
+    </div>
+  </div>
+  <form method="post" action="/rooms/{{.Room.ID}}/assignments/{{.Assignment.ID}}/edit" class="stack">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>{{.T "form.title"}} <input name="title" required value="{{.Assignment.Title}}"></label>
+    <label>{{.T "form.instructions"}} <textarea name="instructions" required>{{.Assignment.Instructions}}</textarea></label>
+    <label>{{.T "form.resource_link"}} <input name="resource_url" type="url" value="{{.Assignment.ResourceURL}}"></label>
+    <label>{{.T "form.deadline"}} <input name="due_date" type="date" required value="{{.Assignment.DueDate}}"></label>
+    <div class="form-actions">
+      <button type="submit">{{.T "action.save"}}</button>
+      <a class="button secondary" href="/rooms/{{.Room.ID}}">{{.T "action.cancel"}}</a>
+    </div>
+  </form>
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{define "profile"}}{{template "layout_start" .}}
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{.T "profile.eyebrow"}}</p>
+      <h2>{{.T "profile.title"}}</h2>
+    </div>
+  </div>
+  <p class="muted">{{.T "profile.subtitle"}}</p>
+  <h3>{{.T "profile.section.basics"}}</h3>
+  <form method="post" action="/profile" class="stack">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>{{.T "profile.field.name"}} <input name="name" required maxlength="80" value="{{.Profile.Name}}"></label>
+    <label>{{.T "profile.field.email"}} <input name="email" type="email" required maxlength="160" value="{{.Profile.Email}}"></label>
+    <label>{{.T "profile.field.language"}}
+      <select name="language">
+        {{range .SupportedLangs}}<option value="{{.}}" {{if eq (printf "%s" .) (printf "%s" $.Profile.Language)}}selected{{end}}>{{$.LangLabel .}}</option>{{end}}
+      </select>
+    </label>
+    <label class="checkbox-row">
+      <input type="checkbox" name="engagement_notif" {{if .Profile.EngagementEnabled}}checked{{end}}>
+      <span>{{.T "profile.engagement"}}</span>
+    </label>
+    <p class="muted">{{.T "profile.engagement.help"}}</p>
+    <button type="submit">{{.T "profile.submit"}}</button>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="section-head"><div><p class="eyebrow">{{.T "profile.eyebrow"}}</p><h2>{{.T "profile.section.password"}}</h2></div></div>
+  <form method="post" action="/profile/password" class="stack">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>{{.T "profile.password.current"}} <input name="current_password" type="password" required autocomplete="current-password"></label>
+    <label>{{.T "profile.password.new"}} <input name="new_password" type="password" required minlength="12" autocomplete="new-password"></label>
+    <p class="muted">{{.T "profile.password.help"}}</p>
+    <button type="submit">{{.T "profile.password.submit"}}</button>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="section-head"><div><p class="eyebrow">{{.T "profile.eyebrow"}}</p><h2>{{.T "profile.section.sessions"}}</h2></div></div>
+  <p class="muted">{{.Tf "profile.sessions.count" .SessionCount}}</p>
+  <form method="post" action="/profile/sessions/revoke-others">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit"{{if le .SessionCount 1}} disabled{{end}}>{{.T "profile.sessions.revoke"}}</button>
   </form>
 </section>
 {{template "layout_end" .}}{{end}}

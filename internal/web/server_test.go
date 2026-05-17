@@ -474,3 +474,170 @@ func TestAuthenticatedPostRequiresCSRF(t *testing.T) {
 		t.Fatalf("expected missing CSRF to be forbidden, got %d", roomRR.Code)
 	}
 }
+
+// TestProfileFlow exercises the /profile self-service endpoints: viewing
+// the page, updating profile fields, hitting the email-taken error path,
+// and changing the password (which revokes other sessions).
+func TestProfileFlow(t *testing.T) {
+	srv := newTestServer(t)
+	handler := srv.Handler()
+	post := func(path string, cookies []*http.Cookie, form url.Values) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr
+	}
+	get := func(path string, cookies []*http.Cookie) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr
+	}
+
+	setupRR := post("/setup", nil, url.Values{
+		"name": {"Mentor"}, "email": {"mentor@example.com"}, "password": {"verysecurepass123"},
+	})
+	if setupRR.Code != http.StatusSeeOther {
+		t.Fatalf("setup status = %d", setupRR.Code)
+	}
+	cookies := setupRR.Result().Cookies()
+	profileBody := get("/profile", cookies).Body.String()
+	if !strings.Contains(profileBody, "mentor@example.com") {
+		t.Fatal("profile page missing user email")
+	}
+	csrfStart := strings.Index(profileBody, `name="csrf" value="`)
+	if csrfStart < 0 {
+		t.Fatal("no csrf on profile")
+	}
+	csrfTail := profileBody[csrfStart+len(`name="csrf" value="`):]
+	csrf := csrfTail[:strings.Index(csrfTail, `"`)]
+
+	// Rename + change language.
+	upd := post("/profile", cookies, url.Values{
+		"csrf": {csrf}, "name": {"Renamed"}, "email": {"renamed@example.com"},
+		"language": {"id"}, "engagement_notif": {"on"},
+	})
+	if upd.Code != http.StatusSeeOther {
+		t.Fatalf("profile update status = %d body=%s", upd.Code, upd.Body.String())
+	}
+	after := get("/profile", cookies).Body.String()
+	if !strings.Contains(after, "renamed@example.com") {
+		t.Fatal("profile update did not persist email")
+	}
+
+	// Wrong current password is rejected with a redirect carrying ?err=current_password.
+	bad := post("/profile/password", cookies, url.Values{
+		"csrf": {csrf}, "current_password": {"wrong"}, "new_password": {"newverysecurepass"},
+	})
+	if bad.Code != http.StatusSeeOther || !strings.Contains(bad.Header().Get("Location"), "current_password") {
+		t.Fatalf("wrong-password redirect: code=%d loc=%q", bad.Code, bad.Header().Get("Location"))
+	}
+
+	// Correct change works.
+	ok := post("/profile/password", cookies, url.Values{
+		"csrf": {csrf}, "current_password": {"verysecurepass123"}, "new_password": {"newverysecurepass456"},
+	})
+	if ok.Code != http.StatusSeeOther || !strings.Contains(ok.Header().Get("Location"), "saved=password") {
+		t.Fatalf("password change: code=%d loc=%q", ok.Code, ok.Header().Get("Location"))
+	}
+}
+
+// TestReportEditDelete walks a mentee writing a report, editing it, then
+// the mentor deleting it via the standard CSRF-protected POST.
+func TestReportEditDelete(t *testing.T) {
+	h := newClassroomHarness(t) // reuse harness — mentee + mentor already set up
+	// Make a mentorship room because reports apply to that mode.
+	// Reuse handler/cookies from the harness; create a new room.
+	postRoom := h.post("/rooms", h.mentorCookies, url.Values{
+		"csrf": {h.mentorCSRF}, "name": {"MR"}, "mode": {"mentorship"},
+	})
+	if postRoom.Code != http.StatusSeeOther {
+		t.Fatalf("create mentorship room: %d", postRoom.Code)
+	}
+	mrID := strings.TrimPrefix(postRoom.Result().Header.Get("Location"), "/rooms/")
+	// Re-invite same mentee into the new room.
+	inv := h.post("/rooms/"+mrID+"/invites", h.mentorCookies, url.Values{
+		"csrf": {h.mentorCSRF}, "role": {"mentee"},
+	})
+	if inv.Code != http.StatusOK {
+		t.Fatalf("invite: %d", inv.Code)
+	}
+	body := inv.Body.String()
+	codeStart := strings.Index(body, "<code>") + len("<code>")
+	codeEnd := strings.Index(body[codeStart:], "</code>")
+	code := body[codeStart : codeStart+codeEnd]
+	// Mentee accepts via /join with a new account.
+	joinRR := h.post("/join", nil, url.Values{
+		"code": {code}, "name": {"M2"}, "email": {"m2@example.com"}, "password": {"verysecurepass123"},
+	})
+	if joinRR.Code != http.StatusSeeOther {
+		t.Fatalf("join: %d", joinRR.Code)
+	}
+	mc := joinRR.Result().Cookies()
+	// Pull a CSRF for the new mentee.
+	getReq := httptest.NewRequest(http.MethodGet, "/rooms/"+mrID, nil)
+	for _, c := range mc {
+		getReq.AddCookie(c)
+	}
+	rr := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr, getReq)
+	roomBody := rr.Body.String()
+	csrfStart := strings.Index(roomBody, `name="csrf" value="`)
+	if csrfStart < 0 {
+		t.Fatal("no csrf in new mentee room view")
+	}
+	mcsrf := roomBody[csrfStart+len(`name="csrf" value="`) : csrfStart+len(`name="csrf" value="`)+strings.Index(roomBody[csrfStart+len(`name="csrf" value="`):], `"`)]
+	// Mentee posts a report.
+	rep := h.post("/rooms/"+mrID+"/reports", mc, url.Values{
+		"csrf": {mcsrf}, "learned": {"L"}, "practiced": {"P"}, "next_plan": {"N"},
+	})
+	if rep.Code != http.StatusSeeOther {
+		t.Fatalf("create report: %d body=%s", rep.Code, rep.Body.String())
+	}
+	// Pull the report ID from the mentee's room view.
+	getReq2 := httptest.NewRequest(http.MethodGet, "/rooms/"+mrID, nil)
+	for _, c := range mc {
+		getReq2.AddCookie(c)
+	}
+	rr2 := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr2, getReq2)
+	body2 := rr2.Body.String()
+	prefix := "/rooms/" + mrID + "/reports/"
+	idx := strings.Index(body2, prefix)
+	if idx < 0 {
+		t.Fatal("no report card in mentee room view")
+	}
+	tail := body2[idx+len(prefix):]
+	rid := tail[:strings.IndexAny(tail, "/\"")]
+	// Edit it as the author.
+	ed := h.post("/rooms/"+mrID+"/reports/"+rid+"/edit", mc, url.Values{
+		"csrf": {mcsrf}, "learned": {"Updated"}, "practiced": {"P"}, "next_plan": {"N"},
+	})
+	if ed.Code != http.StatusSeeOther {
+		t.Fatalf("edit report: %d body=%s", ed.Code, ed.Body.String())
+	}
+	// Mentor can delete it.
+	del := h.post("/rooms/"+mrID+"/reports/"+rid+"/delete", h.mentorCookies, url.Values{
+		"csrf": {h.mentorCSRF},
+	})
+	if del.Code != http.StatusSeeOther {
+		t.Fatalf("delete report: %d body=%s", del.Code, del.Body.String())
+	}
+	// After delete, the report is gone from the mentor's view.
+	getReq3 := httptest.NewRequest(http.MethodGet, "/rooms/"+mrID, nil)
+	for _, c := range h.mentorCookies {
+		getReq3.AddCookie(c)
+	}
+	rr3 := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr3, getReq3)
+	if strings.Contains(rr3.Body.String(), prefix+rid) {
+		t.Fatal("deleted report still appears on room page")
+	}
+}

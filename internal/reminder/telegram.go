@@ -85,6 +85,26 @@ func (t *TelegramNotifier) NotifyTaskDue(ctx context.Context, to Recipient, rem 
 	return nil
 }
 
+func (t *TelegramNotifier) NotifyEngagement(ctx context.Context, to Recipient, ev EngagementEvent) error {
+	if !t.Configured() {
+		log.Print("telegram notifier not configured (SINAU_TELEGRAM_BOT_TOKEN unset); routing to fallback")
+		return t.fallback.NotifyEngagement(ctx, to, ev)
+	}
+	if to.Telegram == "" {
+		log.Printf("recipient user=%s opted for telegram but no telegram_chat_id on file; routing to fallback", to.UserID)
+		return t.fallback.NotifyEngagement(ctx, to, ev)
+	}
+	lang := i18n.Lang(to.Language)
+	if !i18n.IsValid(lang) {
+		lang = i18n.Default
+	}
+	body := engagementSubject(lang, ev)
+	log.Printf("[stub] telegram would send kind=%s to=%s lang=%s body=%q",
+		ev.Kind, to.Telegram, lang, body)
+	_ = t.client
+	return nil
+}
+
 func (t *TelegramNotifier) NotifyAssignmentDue(ctx context.Context, to Recipient, rem domain.AssignmentReminder) error {
 	if !t.Configured() {
 		log.Print("telegram notifier not configured (SINAU_TELEGRAM_BOT_TOKEN unset); routing to fallback")

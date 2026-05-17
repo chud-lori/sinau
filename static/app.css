@@ -162,3 +162,15 @@ form.inline input[type="text"],form.inline input:not([type]){width:auto}
 .link-row input{width:100%;min-width:0}
 .link-add{justify-self:start;background:transparent;color:var(--accent);border:1px dashed var(--accent);border-radius:8px;padding:6px 12px;font:inherit;font-weight:700;cursor:pointer}
 .link-add:hover{background:rgba(23,107,82,.08)}
+
+/* Edit / delete affordances on cards. Delete forms render inline next
+   to the other action links rather than as full buttons. The danger
+   link colour signals destructive intent without a JS confirm. */
+.edit-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:6px}
+.inline-delete{display:inline;margin:0}
+.inline-delete button.link.danger{color:#b3261e;font-weight:700}
+.inline-delete button.link.danger:hover{color:#7d1814}
+.comment-edit{margin:6px 0}
+.comment-edit summary{cursor:pointer;color:var(--accent);font-size:13px;font-weight:700}
+.comment-edit textarea{margin-top:6px;width:100%}
+.form-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
