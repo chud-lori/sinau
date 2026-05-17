@@ -85,6 +85,362 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
+// classroomHarness sets up a fresh server with one mentor + one learner
+// already joined into a single classroom room. Returns the harness ready
+// for HTTP-level tests of the classroom routes.
+type classroomHarness struct {
+	t              *testing.T
+	handler        http.Handler
+	mentorCookies  []*http.Cookie
+	learnerCookies []*http.Cookie
+	mentorCSRF     string
+	learnerCSRF    string
+	roomID         string
+}
+
+func newClassroomHarness(t *testing.T) *classroomHarness {
+	t.Helper()
+	srv := newTestServer(t)
+	h := srv.Handler()
+
+	post := func(path string, cookies []*http.Cookie, form url.Values) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	get := func(path string, cookies []*http.Cookie) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	between := func(body, start, end string) string {
+		i := strings.Index(body, start)
+		if i < 0 {
+			t.Fatalf("could not find %q", start)
+		}
+		rest := body[i+len(start):]
+		j := strings.Index(rest, end)
+		if j < 0 {
+			t.Fatalf("could not find %q after %q", end, start)
+		}
+		return rest[:j]
+	}
+
+	// Mentor setup.
+	setupRR := post("/setup", nil, url.Values{
+		"name":     {"Teacher"},
+		"email":    {"teacher@example.com"},
+		"password": {"verysecurepass123"},
+	})
+	if setupRR.Code != http.StatusSeeOther {
+		t.Fatalf("setup status = %d", setupRR.Code)
+	}
+	mentorCookies := setupRR.Result().Cookies()
+	if len(mentorCookies) == 0 {
+		t.Fatal("setup issued no cookie")
+	}
+
+	// Pull CSRF from mentor's home.
+	mentorCSRF := between(get("/", mentorCookies).Body.String(), `name="csrf" value="`, `"`)
+
+	// Mentor creates a classroom room.
+	roomRR := post("/rooms", mentorCookies, url.Values{
+		"csrf": {mentorCSRF}, "name": {"Data Science 101"}, "mode": {"classroom"},
+	})
+	if roomRR.Code != http.StatusSeeOther {
+		t.Fatalf("room create status = %d body=%s", roomRR.Code, roomRR.Body.String())
+	}
+	roomID := strings.TrimPrefix(roomRR.Result().Header.Get("Location"), "/rooms/")
+
+	// Mentor creates a learner invite.
+	inviteRR := post("/rooms/"+roomID+"/invites", mentorCookies, url.Values{
+		"csrf": {mentorCSRF}, "role": {"learner"},
+	})
+	if inviteRR.Code != http.StatusOK {
+		t.Fatalf("invite status = %d body=%s", inviteRR.Code, inviteRR.Body.String())
+	}
+	inviteCode := between(inviteRR.Body.String(), "<code>", "</code>")
+
+	// Learner joins.
+	joinRR := post("/join", nil, url.Values{
+		"code": {inviteCode}, "name": {"Student"},
+		"email": {"student@example.com"}, "password": {"verysecurepass123"},
+	})
+	if joinRR.Code != http.StatusSeeOther {
+		t.Fatalf("join status = %d body=%s", joinRR.Code, joinRR.Body.String())
+	}
+	learnerCookies := joinRR.Result().Cookies()
+	learnerCSRF := between(get("/rooms/"+roomID, learnerCookies).Body.String(), `name="csrf" value="`, `"`)
+
+	return &classroomHarness{
+		t:              t,
+		handler:        h,
+		mentorCookies:  mentorCookies,
+		learnerCookies: learnerCookies,
+		mentorCSRF:     mentorCSRF,
+		learnerCSRF:    learnerCSRF,
+		roomID:         roomID,
+	}
+}
+
+func (h *classroomHarness) post(path string, cookies []*http.Cookie, form url.Values) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	rr := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr, req)
+	return rr
+}
+
+func TestClassroomAssignmentFlowEnforcesRoleAndMode(t *testing.T) {
+	h := newClassroomHarness(t)
+
+	// Learner cannot create an assignment.
+	bad := h.post("/rooms/"+h.roomID+"/assignments", h.learnerCookies, url.Values{
+		"csrf":         {h.learnerCSRF},
+		"title":        {"Learner-published"},
+		"instructions": {"should fail"},
+		"due_date":     {"2026-12-01"},
+	})
+	if bad.Code != http.StatusForbidden {
+		t.Fatalf("learner publishing assignment: want 403, got %d", bad.Code)
+	}
+
+	// Mentor publishes a valid assignment.
+	createRR := h.post("/rooms/"+h.roomID+"/assignments", h.mentorCookies, url.Values{
+		"csrf":         {h.mentorCSRF},
+		"title":        {"Build a small notebook"},
+		"instructions": {"Train a baseline model"},
+		"due_date":     {"2026-12-01"},
+	})
+	if createRR.Code != http.StatusSeeOther {
+		t.Fatalf("mentor create assignment: want 303, got %d body=%s", createRR.Code, createRR.Body.String())
+	}
+
+	// Mentor cannot submit (wrong role).
+	roomBody := func(cookies []*http.Cookie) string {
+		req := httptest.NewRequest(http.MethodGet, "/rooms/"+h.roomID, nil)
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		rr := httptest.NewRecorder()
+		h.handler.ServeHTTP(rr, req)
+		return rr.Body.String()
+	}
+	body := roomBody(h.learnerCookies)
+	// Pull the assignment ID from the learner's submission form action.
+	prefix := "/rooms/" + h.roomID + "/assignments/"
+	start := strings.Index(body, prefix)
+	if start < 0 {
+		t.Fatal("could not find assignment submission form in learner room body")
+	}
+	tail := body[start+len(prefix):]
+	end := strings.Index(tail, "/submissions")
+	if end < 0 {
+		t.Fatal("malformed submission form action")
+	}
+	assignmentID := tail[:end]
+
+	mentorSubmit := h.post("/rooms/"+h.roomID+"/assignments/"+assignmentID+"/submissions", h.mentorCookies, url.Values{
+		"csrf":     {h.mentorCSRF},
+		"link_url": {"https://example.com/work"},
+	})
+	if mentorSubmit.Code != http.StatusForbidden {
+		t.Fatalf("mentor submitting: want 403, got %d", mentorSubmit.Code)
+	}
+
+	// Learner submits with a bad URL → 400.
+	badURL := h.post("/rooms/"+h.roomID+"/assignments/"+assignmentID+"/submissions", h.learnerCookies, url.Values{
+		"csrf":     {h.learnerCSRF},
+		"link_url": {"javascript:alert(1)"},
+	})
+	if badURL.Code != http.StatusBadRequest {
+		t.Fatalf("learner submit bad URL: want 400, got %d", badURL.Code)
+	}
+
+	// Learner submits properly.
+	goodSubmit := h.post("/rooms/"+h.roomID+"/assignments/"+assignmentID+"/submissions", h.learnerCookies, url.Values{
+		"csrf":     {h.learnerCSRF},
+		"link_url": {"https://docs.google.com/work"},
+		"note":     {"first pass"},
+	})
+	if goodSubmit.Code != http.StatusSeeOther {
+		t.Fatalf("learner submit: want 303, got %d body=%s", goodSubmit.Code, goodSubmit.Body.String())
+	}
+
+	// Find submission ID from mentor's room view (status 'submitted' card).
+	mBody := roomBody(h.mentorCookies)
+	subPrefix := "/rooms/" + h.roomID + "/submissions/"
+	subStart := strings.Index(mBody, subPrefix)
+	if subStart < 0 {
+		t.Fatal("could not find submission review form in mentor room body")
+	}
+	subTail := mBody[subStart+len(subPrefix):]
+	subEnd := strings.Index(subTail, "/review")
+	if subEnd < 0 {
+		t.Fatal("malformed submission review form action")
+	}
+	submissionID := subTail[:subEnd]
+
+	// Learner cannot review.
+	learnerReview := h.post("/rooms/"+h.roomID+"/submissions/"+submissionID+"/review", h.learnerCookies, url.Values{
+		"csrf":     {h.learnerCSRF},
+		"status":   {"reviewed"},
+		"feedback": {"good"},
+		"score":    {"85"},
+	})
+	if learnerReview.Code != http.StatusForbidden {
+		t.Fatalf("learner review: want 403, got %d", learnerReview.Code)
+	}
+
+	// Mentor with bad status → 400.
+	badStatus := h.post("/rooms/"+h.roomID+"/submissions/"+submissionID+"/review", h.mentorCookies, url.Values{
+		"csrf":     {h.mentorCSRF},
+		"status":   {"approved"},
+		"feedback": {"x"},
+	})
+	if badStatus.Code != http.StatusBadRequest {
+		t.Fatalf("mentor review bad status: want 400, got %d", badStatus.Code)
+	}
+
+	// Mentor with revise status but empty feedback → 400.
+	noFeedback := h.post("/rooms/"+h.roomID+"/submissions/"+submissionID+"/review", h.mentorCookies, url.Values{
+		"csrf":     {h.mentorCSRF},
+		"status":   {"revise"},
+		"feedback": {""},
+	})
+	if noFeedback.Code != http.StatusBadRequest {
+		t.Fatalf("mentor revise empty feedback: want 400, got %d", noFeedback.Code)
+	}
+
+	// Mentor reviews successfully.
+	reviewOK := h.post("/rooms/"+h.roomID+"/submissions/"+submissionID+"/review", h.mentorCookies, url.Values{
+		"csrf":     {h.mentorCSRF},
+		"status":   {"reviewed"},
+		"feedback": {"clean"},
+		"score":    {"90"},
+	})
+	if reviewOK.Code != http.StatusSeeOther {
+		t.Fatalf("mentor review ok: want 303, got %d body=%s", reviewOK.Code, reviewOK.Body.String())
+	}
+
+	// Re-review must 404 — guarded by reviewed_at = ''.
+	reviewAgain := h.post("/rooms/"+h.roomID+"/submissions/"+submissionID+"/review", h.mentorCookies, url.Values{
+		"csrf":     {h.mentorCSRF},
+		"status":   {"reviewed"},
+		"feedback": {"changing mind"},
+		"score":    {"95"},
+	})
+	if reviewAgain.Code != http.StatusNotFound {
+		t.Fatalf("mentor re-review: want 404, got %d", reviewAgain.Code)
+	}
+}
+
+func TestClassroomRoutesRejectMentorshipMode(t *testing.T) {
+	// Setup mentor + mentorship room (the default), then make sure
+	// classroom mutators reject it even with the right role.
+	srv := newTestServer(t)
+	h := srv.Handler()
+	post := func(path string, cookies []*http.Cookie, form url.Values) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	get := func(path string, cookies []*http.Cookie) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	between := func(body, start, end string) string {
+		i := strings.Index(body, start)
+		if i < 0 {
+			t.Fatalf("could not find %q", start)
+		}
+		rest := body[i+len(start):]
+		j := strings.Index(rest, end)
+		if j < 0 {
+			t.Fatalf("could not find %q after %q", end, start)
+		}
+		return rest[:j]
+	}
+	rr := post("/setup", nil, url.Values{
+		"name":     {"Mentor"},
+		"email":    {"mentor@example.com"},
+		"password": {"verysecurepass123"},
+	})
+	cookies := rr.Result().Cookies()
+	csrf := between(get("/", cookies).Body.String(), `name="csrf" value="`, `"`)
+	// Default mode: mentorship.
+	roomRR := post("/rooms", cookies, url.Values{"csrf": {csrf}, "name": {"Backend"}})
+	roomID := strings.TrimPrefix(roomRR.Result().Header.Get("Location"), "/rooms/")
+
+	createAssignment := post("/rooms/"+roomID+"/assignments", cookies, url.Values{
+		"csrf": {csrf}, "title": {"x"}, "instructions": {"x"}, "due_date": {"2026-12-01"},
+	})
+	if createAssignment.Code != http.StatusForbidden {
+		t.Fatalf("createAssignment in mentorship room: want 403, got %d", createAssignment.Code)
+	}
+}
+
+func TestInvalidRoomModeRejected(t *testing.T) {
+	srv := newTestServer(t)
+	h := srv.Handler()
+	post := func(path string, cookies []*http.Cookie, form url.Values) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	get := func(path string, cookies []*http.Cookie) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	rr := post("/setup", nil, url.Values{
+		"name": {"Mentor"}, "email": {"m@e.com"}, "password": {"verysecurepass123"},
+	})
+	cookies := rr.Result().Cookies()
+	homeBody := get("/", cookies).Body.String()
+	csrfStart := strings.Index(homeBody, `name="csrf" value="`)
+	if csrfStart < 0 {
+		t.Fatal("no csrf")
+	}
+	csrfTail := homeBody[csrfStart+len(`name="csrf" value="`):]
+	csrf := csrfTail[:strings.Index(csrfTail, `"`)]
+	bad := post("/rooms", cookies, url.Values{"csrf": {csrf}, "name": {"X"}, "mode": {"calssroom"}})
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("typo mode: want 400, got %d", bad.Code)
+	}
+}
+
 func TestAuthenticatedPostRequiresCSRF(t *testing.T) {
 	srv := newTestServer(t)
 	handler := srv.Handler()
@@ -93,7 +449,6 @@ func TestAuthenticatedPostRequiresCSRF(t *testing.T) {
 	form.Set("name", "Mentor")
 	form.Set("email", "mentor@example.com")
 	form.Set("password", "verysecurepass123")
-	form.Set("room_name", "Backend")
 	setupReq := httptest.NewRequest(http.MethodPost, "/setup", strings.NewReader(form.Encode()))
 	setupReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	setupRR := httptest.NewRecorder()
@@ -106,36 +461,16 @@ func TestAuthenticatedPostRequiresCSRF(t *testing.T) {
 		t.Fatal("setup did not issue session cookie")
 	}
 
-	homeReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	roomForm := url.Values{}
+	roomForm.Set("name", "Backend")
+	roomReq := httptest.NewRequest(http.MethodPost, "/rooms", strings.NewReader(roomForm.Encode()))
+	roomReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	for _, c := range cookies {
-		homeReq.AddCookie(c)
+		roomReq.AddCookie(c)
 	}
-	homeRR := httptest.NewRecorder()
-	handler.ServeHTTP(homeRR, homeReq)
-	body := homeRR.Body.String()
-	start := strings.Index(body, `/rooms/`)
-	if start == -1 {
-		t.Fatalf("room link not found in home: %s", body)
-	}
-	rest := body[start+len(`/rooms/`):]
-	end := strings.Index(rest, `"`)
-	if end == -1 {
-		t.Fatal("room id parse failed")
-	}
-	roomID := rest[:end]
-
-	reportForm := url.Values{}
-	reportForm.Set("learned", "HTTP")
-	reportForm.Set("practiced", "handlers")
-	reportForm.Set("next_plan", "tests")
-	reportReq := httptest.NewRequest(http.MethodPost, "/rooms/"+roomID+"/reports", strings.NewReader(reportForm.Encode()))
-	reportReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	for _, c := range cookies {
-		reportReq.AddCookie(c)
-	}
-	reportRR := httptest.NewRecorder()
-	handler.ServeHTTP(reportRR, reportReq)
-	if reportRR.Code != http.StatusForbidden {
-		t.Fatalf("expected missing CSRF to be forbidden, got %d", reportRR.Code)
+	roomRR := httptest.NewRecorder()
+	handler.ServeHTTP(roomRR, roomReq)
+	if roomRR.Code != http.StatusForbidden {
+		t.Fatalf("expected missing CSRF to be forbidden, got %d", roomRR.Code)
 	}
 }

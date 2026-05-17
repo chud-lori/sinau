@@ -7,6 +7,22 @@ const (
 	RoleLearner = "learner"
 )
 
+const (
+	RoomModeMentorship = "mentorship"
+	RoomModeClassroom  = "classroom"
+)
+
+// ValidRoomMode reports whether s is a recognised room mode. Used at the
+// handler boundary so a typo in the form value doesn't silently degrade
+// into "mentorship".
+func ValidRoomMode(s string) bool {
+	switch s {
+	case RoomModeMentorship, RoomModeClassroom:
+		return true
+	}
+	return false
+}
+
 type User struct {
 	ID    string
 	Name  string
@@ -16,9 +32,46 @@ type User struct {
 type Room struct {
 	ID                 string
 	Name               string
+	Mode               string
 	CreatedAt          string
 	Role               string
 	LeaderboardVisible bool
+}
+
+// RoleLabel returns the user-facing label for a role within this room's
+// mode. Mentorship rooms use "Mentor" / "Learner"; classroom rooms use
+// "Teacher" / "Student". Templates should never render raw role/mode
+// strings — always go through this helper.
+func (r Room) RoleLabel(role string) string {
+	if r.Mode == RoomModeClassroom {
+		switch role {
+		case RoleMentor:
+			return "Teacher"
+		case RoleLearner:
+			return "Student"
+		}
+	}
+	switch role {
+	case RoleMentor:
+		return "Mentor"
+	case RoleLearner:
+		return "Learner"
+	}
+	return role
+}
+
+// MyRoleLabel is RoleLabel applied to the current viewer's role.
+func (r Room) MyRoleLabel() string { return r.RoleLabel(r.Role) }
+
+// ModeLabel returns a human-readable label for the room's workflow.
+func (r Room) ModeLabel() string {
+	switch r.Mode {
+	case RoomModeClassroom:
+		return "Classroom"
+	case RoomModeMentorship:
+		return "Mentorship"
+	}
+	return r.Mode
 }
 
 const (
@@ -115,6 +168,85 @@ type Invite struct {
 	UsedAt    sql.NullString
 }
 
+type Assignment struct {
+	ID                 string
+	RoomID             string
+	Title              string
+	Instructions       string
+	ResourceURL        string
+	DueDate            string
+	CreatedAt          string
+	Submitted          int
+	TotalLearners      int
+	MySubmissionStatus string
+	MySubmissionURL    string
+	MyFeedback         string
+	MyScore            string
+}
+
+type Submission struct {
+	ID              string
+	AssignmentID    string
+	AssignmentTitle string
+	StudentID       string
+	StudentName     string
+	StudentEmail    string
+	LinkURL         string
+	Note            string
+	Status          string
+	Feedback        string
+	Score           string
+	SubmittedAt     string
+	ReviewedAt      string
+}
+
+type ClassroomData struct {
+	Assignments    []Assignment
+	Submissions    []Submission
+	PendingReviews int
+}
+
+// InvitePreview is the public-safe view of an invite, used to show the
+// joiner what they're about to join (room name, mode, role) before they
+// submit name/email/password. Mode-aware via the room's mode.
+type InvitePreview struct {
+	RoomName string
+	RoomMode string
+	Role     string
+	Valid    bool
+}
+
+// RoleLabel translates the invited role using the same convention as
+// Room.RoleLabel.
+func (p InvitePreview) RoleLabel() string {
+	if p.RoomMode == RoomModeClassroom {
+		switch p.Role {
+		case RoleMentor:
+			return "Teacher"
+		case RoleLearner:
+			return "Student"
+		}
+	}
+	switch p.Role {
+	case RoleMentor:
+		return "Mentor"
+	case RoleLearner:
+		return "Learner"
+	}
+	return p.Role
+}
+
+// ModeLabel mirrors Room.ModeLabel for the preview.
+func (p InvitePreview) ModeLabel() string {
+	switch p.RoomMode {
+	case RoomModeClassroom:
+		return "Classroom"
+	case RoomModeMentorship:
+		return "Mentorship"
+	}
+	return p.RoomMode
+}
+
 type Stats struct {
 	BlockedReports   int
 	WaitingReports   int
@@ -141,6 +273,7 @@ type RoomData struct {
 	Reports     []Report
 	Tasks       []Task
 	Invites     []Invite
+	Classroom   ClassroomData
 	Stats       Stats
 	Leaderboard []LeaderboardEntry
 	MyPoints    int

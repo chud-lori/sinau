@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -25,7 +26,11 @@ func createUserRoom(t *testing.T, st *Store, name, email string) (string, string
 	if err != nil {
 		t.Fatal(err)
 	}
-	uid, err := st.CreateInitialRoom(name, email, hash, "Backend")
+	uid, err := st.CreateInitialRoomCreator(name, email, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roomID, err := st.CreateRoom("Backend", uid, domain.RoomModeMentorship)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +41,62 @@ func createUserRoom(t *testing.T, st *Store, name, email string) (string, string
 	if len(rooms) != 1 {
 		t.Fatalf("expected one room, got %d", len(rooms))
 	}
-	return uid, rooms[0].ID
+	if rooms[0].ID != roomID {
+		t.Fatalf("expected created room %s, got %s", roomID, rooms[0].ID)
+	}
+	return uid, roomID
+}
+
+func TestMigrateHandlesPreRebaseClassroomMigration3(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sinau.db")
+	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmts := []string{
+		`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`,
+		`INSERT INTO schema_migrations(version, applied_at) VALUES(1, '2026-01-01T00:00:00Z'), (2, '2026-01-01T00:00:00Z'), (3, '2026-01-01T00:00:00Z')`,
+		`CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL, created_at TEXT NOT NULL)`,
+		`CREATE TABLE memberships (room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('mentor','learner')), created_at TEXT NOT NULL, PRIMARY KEY(room_id, user_id))`,
+		`CREATE TABLE rooms (id TEXT PRIMARY KEY, name TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'mentorship', created_by TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL)`,
+		`CREATE TABLE tasks (id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE, assigned_to TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, assigned_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, title TEXT NOT NULL, detail TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('todo','doing','done')), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, due_date TEXT NOT NULL DEFAULT '', last_reminded_at TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE assignments (id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE, created_by TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL, instructions TEXT NOT NULL, resource_url TEXT NOT NULL, due_date TEXT NOT NULL, created_at TEXT NOT NULL)`,
+		`CREATE TABLE submissions (id TEXT PRIMARY KEY, assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE, student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, link_url TEXT NOT NULL, note TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('submitted','reviewed','revise')), feedback TEXT NOT NULL, score TEXT NOT NULL, submitted_at TEXT NOT NULL, reviewed_at TEXT NOT NULL, UNIQUE(assignment_id, student_id))`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, tc := range []struct {
+		table  string
+		column string
+	}{
+		{"rooms", "mode"},
+		{"rooms", "leaderboard_visible"},
+		{"users", "can_create_rooms"},
+		{"tasks", "points_awarded"},
+		{"tasks", "reviewed_at"},
+		{"notification_prefs", "whatsapp_number"},
+		{"notification_prefs", "telegram_chat_id"},
+	} {
+		ok, err := st.columnExists(tc.table, tc.column)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			t.Fatalf("expected %s.%s to exist after compatibility migration", tc.table, tc.column)
+		}
+	}
 }
 
 func createInvite(t *testing.T, st *Store, roomID, mentorID, role string) string {
@@ -70,15 +130,68 @@ func TestInitialSetupOnlyRunsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateInitialRoom("Mentor", "mentor@example.com", hash, "Backend"); err != nil {
+	if _, err := st.CreateInitialRoomCreator("Mentor", "mentor@example.com", hash); err != nil {
 		t.Fatal(err)
 	}
-	_, err = st.CreateInitialRoom("Other", "other@example.com", hash, "Frontend")
+	_, err = st.CreateInitialRoomCreator("Other", "other@example.com", hash)
 	if err != ErrSetupComplete {
 		t.Fatalf("expected ErrSetupComplete, got %v", err)
 	}
 	if got := st.UserCount(); got != 1 {
 		t.Fatalf("expected single user after blocked second setup, got %d", got)
+	}
+}
+
+func TestInitialRoomCreatorCanCreateFirstRoomAfterSetup(t *testing.T) {
+	st := newTestStore(t)
+	hash, err := auth.HashPassword("verysecurepass123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mentorID, err := st.CreateInitialRoomCreator("Mentor", "mentor@example.com", hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.CanCreateRooms(mentorID) {
+		t.Fatal("initial account should be able to create rooms")
+	}
+	if st.IsMentor(mentorID) {
+		t.Fatal("initial account should not be a room mentor before joining or creating a room")
+	}
+	rooms, err := st.RoomsFor(mentorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rooms) != 0 {
+		t.Fatalf("setup should not create a room, got %d", len(rooms))
+	}
+	roomID, err := st.CreateRoom("Class A", mentorID, domain.RoomModeClassroom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rm, role, ok := st.RoomAccess(roomID, mentorID)
+	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
+		t.Fatalf("created room access broken: room=%+v role=%q ok=%v", rm, role, ok)
+	}
+	if !st.IsMentor(mentorID) {
+		t.Fatal("room creator should become mentor in the created room")
+	}
+}
+
+func TestRoomMentorInviteDoesNotGrantCreateRoomsCapability(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
+	code := createInvite(t, st, roomID, mentorID, domain.RoleMentor)
+	coMentorID, _ := joinLearner(t, st, code, "Co Mentor", "co@example.com")
+
+	if !st.IsMentor(coMentorID) {
+		t.Fatal("mentor invite should grant mentor role inside the room")
+	}
+	if st.CanCreateRooms(coMentorID) {
+		t.Fatal("room mentor invite should not grant global room creation capability")
+	}
+	if _, err := st.CreateRoom("Other", coMentorID, domain.RoomModeMentorship); err == nil {
+		t.Fatal("room mentor without capability created a new room")
 	}
 }
 
@@ -135,7 +248,7 @@ func TestLearnerOnlySeesOwnReports(t *testing.T) {
 func TestMentorCanCreateMultipleRooms(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, firstRoomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
-	secondRoomID, err := st.CreateRoom("Frontend", mentorID)
+	secondRoomID, err := st.CreateRoom("Frontend", mentorID, domain.RoomModeMentorship)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,8 +262,58 @@ func TestMentorCanCreateMultipleRooms(t *testing.T) {
 	if len(rooms) != 2 {
 		t.Fatalf("expected two rooms, got %d", len(rooms))
 	}
-	if !st.IsMentor(mentorID) {
+	if !st.CanCreateRooms(mentorID) {
 		t.Fatal("mentor should be able to create rooms")
+	}
+}
+
+func TestClassroomAssignmentsCanBeSubmittedAndReviewed(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, _ := createUserRoom(t, st, "Mentor", "mentor@example.com")
+	roomID, err := st.CreateRoom("Data Science", mentorID, domain.RoomModeClassroom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rm, role, ok := st.RoomAccess(roomID, mentorID)
+	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
+		t.Fatalf("classroom room access broken: room=%+v role=%q ok=%v", rm, role, ok)
+	}
+	code := createInvite(t, st, roomID, mentorID, domain.RoleLearner)
+	learnerID, _ := joinLearner(t, st, code, "Student", "student@example.com")
+
+	if err := st.CreateAssignment(roomID, mentorID, "Build notebook", "Train a small model", "https://docs.google.com/doc", "2026-06-01"); err != nil {
+		t.Fatal(err)
+	}
+	studentAssignments, err := st.Assignments(roomID, learnerID, domain.RoleLearner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(studentAssignments) != 1 || studentAssignments[0].MySubmissionStatus != "" {
+		t.Fatalf("expected one unsubmitted assignment, got %+v", studentAssignments)
+	}
+	if err := st.SubmitAssignment(roomID, studentAssignments[0].ID, learnerID, "https://colab.research.google.com/notebook", "Finished baseline"); err != nil {
+		t.Fatal(err)
+	}
+	submissions, err := st.Submissions(roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(submissions) != 1 || submissions[0].Status != "submitted" || submissions[0].StudentName != "Student" {
+		t.Fatalf("expected submitted student work, got %+v", submissions)
+	}
+	updated, err := st.ReviewSubmission(roomID, submissions[0].ID, "reviewed", "Good baseline", "90")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated {
+		t.Fatal("review did not update submission")
+	}
+	studentAssignments, err = st.Assignments(roomID, learnerID, domain.RoleLearner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if studentAssignments[0].MySubmissionStatus != "reviewed" || studentAssignments[0].MyScore != "90" {
+		t.Fatalf("learner did not see review result: %+v", studentAssignments[0])
 	}
 }
 

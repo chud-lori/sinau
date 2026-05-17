@@ -46,24 +46,28 @@ type PageData struct {
 	SetupNeeded          bool
 	NotificationsEnabled bool
 	UserPoints           int
-	Rooms        []domain.Room
-	Room         domain.Room
-	Members      []domain.Member
-	Reports      []domain.Report
-	Report       domain.Report
-	Comments     []domain.Comment
-	Tasks        []domain.Task
-	Invites      []domain.Invite
-	InviteCode   string
-	JoinCode     string
-	Stats        domain.Stats
-	RoomLearners []domain.Member
-	Leaderboard  []domain.LeaderboardEntry
-	MyPoints     int
-	MyRank       domain.Rank
-	MentorDash   domain.MentorDashboard
-	LearnerDash  domain.LearnerDashboard
-	Prefs        domain.NotificationPrefs
+	Rooms                []domain.Room
+	Room                 domain.Room
+	InvitePreview        domain.InvitePreview
+	Members              []domain.Member
+	Reports              []domain.Report
+	Report               domain.Report
+	Comments             []domain.Comment
+	Tasks                []domain.Task
+	Assignments          []domain.Assignment
+	Submissions          []domain.Submission
+	PendingReviews       int
+	Invites              []domain.Invite
+	InviteCode           string
+	JoinCode             string
+	Stats                domain.Stats
+	RoomLearners         []domain.Member
+	Leaderboard          []domain.LeaderboardEntry
+	MyPoints             int
+	MyRank               domain.Rank
+	MentorDash           domain.MentorDashboard
+	LearnerDash          domain.LearnerDashboard
+	Prefs                domain.NotificationPrefs
 }
 
 func New(cfg Config) (*Server, error) {
@@ -106,6 +110,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /rooms/{roomID}/tasks", s.auth(s.createTask))
 	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/status", s.auth(s.updateTask))
 	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/review", s.auth(s.reviewTask))
+	mux.HandleFunc("POST /rooms/{roomID}/assignments", s.auth(s.createAssignment))
+	mux.HandleFunc("POST /rooms/{roomID}/assignments/{assignmentID}/submissions", s.auth(s.submitAssignment))
+	mux.HandleFunc("POST /rooms/{roomID}/submissions/{submissionID}/review", s.auth(s.reviewSubmission))
 	mux.HandleFunc("POST /rooms/{roomID}/settings", s.auth(s.updateRoomSettings))
 	if s.notificationsEnabled {
 		mux.HandleFunc("GET /settings", s.auth(s.settingsPage))
@@ -117,6 +124,11 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("POST /settings", http.NotFound)
 	}
 	mux.HandleFunc("GET /help", s.withUser(s.helpPage))
+	// /guide was a duplicate of /help in an earlier revision. Redirect any
+	// bookmarks at it to the canonical URL.
+	mux.HandleFunc("GET /guide", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/help", http.StatusMovedPermanently)
+	})
 	return securityHeaders(mux)
 }
 
@@ -215,7 +227,7 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		s.render(w, "landing", PageData{Title: "Mentor-led learning rooms", SetupNeeded: s.store.UserCount() == 0})
 		return
 	}
-	if s.store.IsMentor(u.ID) {
+	if s.store.CanCreateRooms(u.ID) || s.store.IsMentor(u.ID) {
 		dash, err := s.store.MentorDashboard(u.ID)
 		if err != nil {
 			s.serverError(w, err)
@@ -254,9 +266,8 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	name := auth.Clean(r.FormValue("name"), 80)
 	email := strings.ToLower(auth.Clean(r.FormValue("email"), 160))
 	password := r.FormValue("password")
-	roomName := auth.Clean(r.FormValue("room_name"), 100)
-	if name == "" || !auth.ValidEmail(email) || len(password) < 12 || roomName == "" {
-		s.render(w, "setup", PageData{Title: "Setup", Error: "Use a name, valid email, room name, and password with at least 12 characters."})
+	if name == "" || !auth.ValidEmail(email) || len(password) < 12 {
+		s.render(w, "setup", PageData{Title: "Setup", Error: "Use a name, valid email, and password with at least 12 characters."})
 		return
 	}
 	hash, err := auth.HashPassword(password)
@@ -264,7 +275,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
-	uid, err := s.store.CreateInitialRoom(name, email, hash, roomName)
+	uid, err := s.store.CreateInitialRoomCreator(name, email, hash)
 	if err == store.ErrSetupComplete {
 		http.Error(w, "setup already completed", http.StatusForbidden)
 		return
@@ -324,7 +335,11 @@ func (s *Server) joinForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := auth.Clean(r.URL.Query().Get("code"), 120)
-	s.render(w, "join", PageData{Title: "Join", JoinCode: code})
+	pd := PageData{Title: "Join", JoinCode: code}
+	if code != "" {
+		pd.InvitePreview = s.store.InvitePreview(code)
+	}
+	s.render(w, "join", pd)
 }
 
 func (s *Server) join(w http.ResponseWriter, r *http.Request) {
@@ -332,8 +347,9 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	name := auth.Clean(r.FormValue("name"), 80)
 	email := strings.ToLower(auth.Clean(r.FormValue("email"), 160))
 	password := r.FormValue("password")
+	preview := s.store.InvitePreview(code)
 	if code == "" || name == "" || !auth.ValidEmail(email) || len(password) < 12 {
-		s.render(w, "join", PageData{Title: "Join", JoinCode: code, Error: "Use invite code, name, valid email, and password with at least 12 characters."})
+		s.render(w, "join", PageData{Title: "Join", JoinCode: code, InvitePreview: preview, Error: "Use invite code, name, valid email, and password with at least 12 characters."})
 		return
 	}
 	hash, err := auth.HashPassword(password)
@@ -343,7 +359,7 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	}
 	uid, roomID, err := s.store.JoinWithInvite(code, name, email, hash)
 	if err != nil {
-		s.render(w, "join", PageData{Title: "Join", JoinCode: code, Error: "Invite is invalid, used, expired, or the email is already registered."})
+		s.render(w, "join", PageData{Title: "Join", JoinCode: code, InvitePreview: preview, Error: "Invite is invalid, used, expired, or the email is already registered."})
 		return
 	}
 	if err := s.issueSession(w, uid); err != nil {
@@ -355,16 +371,24 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 	u := current(r)
-	if !s.store.IsMentor(u.ID) {
+	if !s.store.CanCreateRooms(u.ID) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	name := auth.Clean(r.FormValue("name"), 100)
+	mode := auth.Clean(r.FormValue("mode"), 40)
 	if name == "" {
 		http.Error(w, "room name required", http.StatusBadRequest)
 		return
 	}
-	roomID, err := s.store.CreateRoom(name, u.ID)
+	if mode == "" {
+		mode = domain.RoomModeMentorship
+	}
+	if !domain.ValidRoomMode(mode) {
+		http.Error(w, "unknown room format", http.StatusBadRequest)
+		return
+	}
+	roomID, err := s.store.CreateRoom(name, u.ID, mode)
 	if err != nil {
 		s.serverError(w, err)
 		return
@@ -398,15 +422,16 @@ func (s *Server) roomPage(w http.ResponseWriter, r *http.Request) {
 	pd.RoomLearners = learners
 	pd.Reports = data.Reports
 	pd.Tasks = data.Tasks
+	pd.Assignments = data.Classroom.Assignments
+	pd.Submissions = data.Classroom.Submissions
+	pd.PendingReviews = data.Classroom.PendingReviews
 	pd.Invites = data.Invites
 	pd.Stats = data.Stats
 	pd.MyPoints = data.MyPoints
 	pd.MyRank = data.MyRank
-	// Mentor always sees the full leaderboard; learners only see it when
-	// the room owner has flipped the visibility toggle.
-	if role == domain.RoleMentor || rm.LeaderboardVisible {
-		pd.Leaderboard = data.Leaderboard
-	}
+	// data.Leaderboard is already empty for learners in rooms with the
+	// visibility toggle off (see RoomData), so a direct copy is safe.
+	pd.Leaderboard = data.Leaderboard
 	s.render(w, "room", pd)
 }
 
@@ -617,6 +642,89 @@ func (s *Server) reviewTask(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
 }
 
+func (s *Server) createAssignment(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID := r.PathValue("roomID")
+	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	title := auth.Clean(r.FormValue("title"), 180)
+	instructions := auth.Clean(r.FormValue("instructions"), 2000)
+	resourceURL := auth.Clean(r.FormValue("resource_url"), 400)
+	dueDate := auth.Clean(r.FormValue("due_date"), 10)
+	if title == "" || instructions == "" || dueDate == "" {
+		http.Error(w, "title, instructions, and deadline are required", http.StatusBadRequest)
+		return
+	}
+	if _, err := time.Parse("2006-01-02", dueDate); err != nil {
+		http.Error(w, "deadline must use YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+	if resourceURL != "" && !auth.ValidExternalURL(resourceURL) {
+		http.Error(w, "resource link must be an http or https URL", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.CreateAssignment(roomID, u.ID, title, instructions, resourceURL, dueDate); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
+func (s *Server) submitAssignment(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, assignmentID := r.PathValue("roomID"), r.PathValue("assignmentID")
+	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok || role != domain.RoleLearner || rm.Mode != domain.RoomModeClassroom {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	linkURL := auth.Clean(r.FormValue("link_url"), 400)
+	note := auth.Clean(r.FormValue("note"), 1600)
+	if linkURL == "" || !auth.ValidExternalURL(linkURL) {
+		http.Error(w, "submission link must be an http or https URL", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.SubmitAssignment(roomID, assignmentID, u.ID, linkURL, note); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
+func (s *Server) reviewSubmission(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, submissionID := r.PathValue("roomID"), r.PathValue("submissionID")
+	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	status := r.FormValue("status")
+	if status != "reviewed" && status != "revise" {
+		http.Error(w, "bad status", http.StatusBadRequest)
+		return
+	}
+	feedback := auth.Clean(r.FormValue("feedback"), 2000)
+	score := auth.Clean(r.FormValue("score"), 80)
+	if status == "revise" && feedback == "" {
+		http.Error(w, "revision feedback is required", http.StatusBadRequest)
+		return
+	}
+	updated, err := s.store.ReviewSubmission(roomID, submissionID, status, feedback, score)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if !updated {
+		http.NotFound(w, r)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
 func (s *Server) updateRoomSettings(w http.ResponseWriter, r *http.Request) {
 	u := current(r)
 	roomID := r.PathValue("roomID")
@@ -633,11 +741,10 @@ func (s *Server) updateRoomSettings(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
 }
 
+// settingsPage / updateSettings are only registered when
+// notificationsEnabled is true (see Handler()). No second guard needed
+// inside the handlers — the route layer owns the gate.
 func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
-	if !s.notificationsEnabled {
-		http.NotFound(w, r)
-		return
-	}
 	u := current(r)
 	pd := s.pageData(r, "Settings")
 	pd.Prefs = s.store.NotificationPrefsFor(u.ID)
@@ -648,10 +755,6 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
-	if !s.notificationsEnabled {
-		http.NotFound(w, r)
-		return
-	}
 	u := current(r)
 	enabled := r.FormValue("enabled") == "on" || r.FormValue("enabled") == "1"
 	channel := r.FormValue("channel")
