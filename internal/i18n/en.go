@@ -424,5 +424,72 @@ func init() {
 		"notif.assignment_due.instructions": "Instructions:",
 		"notif.assignment_due.footer":       "Open Sinau to submit your work or update your progress.",
 		"notif.assignment_due.short":        "Sinau reminder: assignment %q in %q is due %s.",
+
+		// Engagement notifications — shared body chrome
+		"notif.engagement.greeting": "Hi %s,",
+		"notif.engagement.snippet":  "What they wrote:",
+		"notif.engagement.footer":   "Open Sinau to reply or follow up.",
+		// Report comment
+		"notif.report_comment.subject": "Sinau: %s commented on your report in %q",
+		"notif.report_comment.body":    "%s left a new comment on your report in %q.",
+		// Submission received (teacher-facing)
+		"notif.submission_made.subject": "Sinau: %s submitted %q",
+		"notif.submission_made.body":    "%s just submitted %q in your class %q.",
+		// Feedback posted (student-facing)
+		"notif.feedback_posted.subject":    "Sinau: feedback ready on %q",
+		"notif.feedback_posted.body":       "Your teacher posted feedback on %q.",
+		"notif.feedback_posted.body_score": "Your teacher posted feedback on %q. Score: %s.",
+
+		// Topbar
+		"nav.profile": "Profile",
+
+		// Profile page
+		"title.profile":         "Profile",
+		"title.report.edit":     "Edit report",
+		"title.task.edit":       "Edit task",
+		"title.assignment.edit": "Edit assignment",
+		"profile.eyebrow":       "Account",
+		"profile.title":         "Your account",
+		"profile.subtitle":      "Update how you appear in Sinau and where reminders are sent.",
+		"profile.section.basics":   "Profile",
+		"profile.section.password": "Password",
+		"profile.section.notif":    "Notifications",
+		"profile.section.sessions": "Sessions",
+		"profile.field.name":       "Display name",
+		"profile.field.email":      "Email",
+		"profile.field.language":   "Language",
+		"profile.engagement":       "Email me when someone comments, submits, or gives feedback",
+		"profile.engagement.help":  "Deadline reminders still follow your settings on the Notifications page.",
+		"profile.submit":           "Save profile",
+		"profile.password.current": "Current password",
+		"profile.password.new":     "New password",
+		"profile.password.submit":  "Change password",
+		"profile.password.help":    "Changing your password signs you out everywhere else.",
+		"profile.sessions.count":   "%d active session(s) — including this one.",
+		"profile.sessions.revoke":  "Sign out other devices",
+		"profile.saved":            "Profile saved.",
+		"profile.password.saved":   "Password changed. Other devices are signed out.",
+		"profile.sessions.revoked": "Other sessions signed out.",
+		"profile.error.invalid":    "Use a valid name, email, and supported language.",
+		"profile.error.email_taken": "Another account is already using that email.",
+		"profile.password.error.current": "Current password did not match.",
+		"profile.password.error.new":     "New password must be at least 12 characters.",
+
+		// Edit / delete shared
+		"action.edit":            "Edit",
+		"action.delete":          "Delete",
+		"action.delete.confirm":  "Delete this — are you sure?",
+		"action.cancel":          "Cancel",
+		"action.save":            "Save changes",
+		"edited.indicator":       "edited",
+		"edited.indicator.with":  "edited %s",
+		"report.edit.eyebrow":    "Edit report",
+		"report.edit.title":      "Update your check-in",
+		"task.edit.eyebrow":      "Edit task",
+		"task.edit.title":        "Update task",
+		"assignment.edit.eyebrow": "Edit assignment",
+		"assignment.edit.title":   "Update assignment",
+		"comment.edit.placeholder": "Edit your comment",
+		"comment.edit.save":       "Save comment",
 	})
 }

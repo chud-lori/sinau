@@ -14,6 +14,7 @@ import (
 	"sinau/internal/auth"
 	"sinau/internal/domain"
 	"sinau/internal/i18n"
+	"sinau/internal/reminder"
 	"sinau/internal/store"
 )
 
@@ -25,6 +26,7 @@ type Server struct {
 	dummyHash            string
 	authLimiter          *limiter
 	notificationsEnabled bool
+	engagement           *reminder.Engagement
 }
 
 type Config struct {
@@ -33,6 +35,7 @@ type Config struct {
 	StaticDir            string
 	SecureCookie         bool
 	NotificationsEnabled bool
+	Engagement           *reminder.Engagement
 }
 
 type ctxKey string
@@ -79,6 +82,10 @@ type PageData struct {
 	MentorDash           domain.MentorDashboard
 	MenteeDash           domain.MenteeDashboard
 	Prefs                domain.NotificationPrefs
+	Task                 domain.Task
+	Assignment           domain.Assignment
+	Profile              *domain.User
+	SessionCount         int
 }
 
 // T returns the localised string for key in the page's active language.
@@ -119,6 +126,7 @@ func New(cfg Config) (*Server, error) {
 		dummyHash:            dummy,
 		authLimiter:          newLimiter(0.2, 8),
 		notificationsEnabled: cfg.NotificationsEnabled,
+		engagement:           cfg.Engagement,
 	}, nil
 }
 
@@ -138,14 +146,29 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /rooms/{roomID}/invites", s.auth(s.createInvite))
 	mux.HandleFunc("POST /rooms/{roomID}/reports", s.auth(s.createReport))
 	mux.HandleFunc("GET /rooms/{roomID}/reports/{reportID}", s.auth(s.reportPage))
+	mux.HandleFunc("GET /rooms/{roomID}/reports/{reportID}/edit", s.auth(s.editReportForm))
+	mux.HandleFunc("POST /rooms/{roomID}/reports/{reportID}/edit", s.auth(s.editReport))
+	mux.HandleFunc("POST /rooms/{roomID}/reports/{reportID}/delete", s.auth(s.deleteReport))
 	mux.HandleFunc("POST /rooms/{roomID}/reports/{reportID}/comments", s.auth(s.createComment))
+	mux.HandleFunc("POST /rooms/{roomID}/reports/{reportID}/comments/{commentID}/edit", s.auth(s.editComment))
+	mux.HandleFunc("POST /rooms/{roomID}/reports/{reportID}/comments/{commentID}/delete", s.auth(s.deleteComment))
 	mux.HandleFunc("POST /rooms/{roomID}/tasks", s.auth(s.createTask))
 	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/status", s.auth(s.updateTask))
 	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/review", s.auth(s.reviewTask))
+	mux.HandleFunc("GET /rooms/{roomID}/tasks/{taskID}/edit", s.auth(s.editTaskForm))
+	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/edit", s.auth(s.editTask))
+	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/delete", s.auth(s.deleteTask))
 	mux.HandleFunc("POST /rooms/{roomID}/assignments", s.auth(s.createAssignment))
+	mux.HandleFunc("GET /rooms/{roomID}/assignments/{assignmentID}/edit", s.auth(s.editAssignmentForm))
+	mux.HandleFunc("POST /rooms/{roomID}/assignments/{assignmentID}/edit", s.auth(s.editAssignment))
+	mux.HandleFunc("POST /rooms/{roomID}/assignments/{assignmentID}/delete", s.auth(s.deleteAssignment))
 	mux.HandleFunc("POST /rooms/{roomID}/assignments/{assignmentID}/submissions", s.auth(s.submitAssignment))
 	mux.HandleFunc("POST /rooms/{roomID}/submissions/{submissionID}/review", s.auth(s.reviewSubmission))
 	mux.HandleFunc("POST /rooms/{roomID}/settings", s.auth(s.updateRoomSettings))
+	mux.HandleFunc("GET /profile", s.auth(s.profilePage))
+	mux.HandleFunc("POST /profile", s.auth(s.updateProfile))
+	mux.HandleFunc("POST /profile/password", s.auth(s.updatePassword))
+	mux.HandleFunc("POST /profile/sessions/revoke-others", s.auth(s.revokeOtherSessions))
 	if s.notificationsEnabled {
 		mux.HandleFunc("GET /settings", s.auth(s.settingsPage))
 		mux.HandleFunc("POST /settings", s.auth(s.updateSettings))
@@ -762,10 +785,12 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "comment required", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.CreateComment(reportID, u.ID, body); err != nil {
+	commentID, err := s.store.CreateComment(reportID, u.ID, body)
+	if err != nil {
 		s.serverError(w, err)
 		return
 	}
+	s.dispatchReportComment(rep, u, body, commentID, roomID, reportID)
 	http.Redirect(w, r, "/rooms/"+roomID+"/reports/"+reportID, http.StatusSeeOther)
 }
 
@@ -893,7 +918,7 @@ func (s *Server) createAssignment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "resource link must be an http or https URL", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.CreateAssignment(roomID, u.ID, title, instructions, resourceURL, dueDate); err != nil {
+	if _, err := s.store.CreateAssignment(roomID, u.ID, title, instructions, resourceURL, dueDate); err != nil {
 		s.serverError(w, err)
 		return
 	}
@@ -925,6 +950,9 @@ func (s *Server) submitAssignment(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.SubmitAssignment(roomID, assignmentID, u.ID, note, links); err != nil {
 		s.serverError(w, err)
 		return
+	}
+	if a, err := s.store.AssignmentByID(roomID, assignmentID); err == nil {
+		s.dispatchSubmissionMade(u, roomID, a.Title)
 	}
 	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
 }
@@ -960,6 +988,9 @@ func (s *Server) reviewSubmission(w http.ResponseWriter, r *http.Request) {
 	if !updated {
 		http.NotFound(w, r)
 		return
+	}
+	if studentID, assignmentTitle, err := s.store.SubmissionContext(submissionID); err == nil {
+		s.dispatchFeedbackPosted(studentID, roomID, assignmentTitle, feedback, score)
 	}
 	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
 }
@@ -1064,4 +1095,486 @@ func (s *Server) render(w http.ResponseWriter, name string, data PageData) {
 func (s *Server) serverError(w http.ResponseWriter, err error) {
 	log.Printf("server error: %v", err)
 	http.Error(w, "internal server error", http.StatusInternalServerError)
+}
+
+// profilePage renders the /profile self-service view: name/email/language/
+// engagement notif toggle, change-password form, and a Sessions section
+// with the count of active sessions plus a "Sign out other devices"
+// button. Each form posts to a separate endpoint so the success/error
+// state for one (e.g. password) does not clobber the others.
+func (s *Server) profilePage(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	profile, err := s.store.UserByID(u.ID)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	count, err := s.store.UserSessionCount(u.ID)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	pd := s.pageData(r, "title.profile")
+	pd.Profile = profile
+	pd.SessionCount = count
+	switch r.URL.Query().Get("saved") {
+	case "profile":
+		pd.Notice = i18n.T(pd.Lang, "profile.saved")
+	case "password":
+		pd.Notice = i18n.T(pd.Lang, "profile.password.saved")
+	case "sessions":
+		pd.Notice = i18n.T(pd.Lang, "profile.sessions.revoked")
+	}
+	switch r.URL.Query().Get("err") {
+	case "email_taken":
+		pd.Error = i18n.T(pd.Lang, "profile.error.email_taken")
+	case "invalid":
+		pd.Error = i18n.T(pd.Lang, "profile.error.invalid")
+	case "current_password":
+		pd.Error = i18n.T(pd.Lang, "profile.password.error.current")
+	case "new_password":
+		pd.Error = i18n.T(pd.Lang, "profile.password.error.new")
+	}
+	s.render(w, "profile", pd)
+}
+
+func (s *Server) updateProfile(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	name := auth.Clean(r.FormValue("name"), 80)
+	email := strings.ToLower(auth.Clean(r.FormValue("email"), 160))
+	lang := i18n.Lang(strings.ToLower(strings.TrimSpace(r.FormValue("language"))))
+	engagement := r.FormValue("engagement_notif") == "on" || r.FormValue("engagement_notif") == "1"
+	if name == "" || !auth.ValidEmail(email) || !i18n.IsValid(lang) {
+		http.Redirect(w, r, "/profile?err=invalid", http.StatusSeeOther)
+		return
+	}
+	err := s.store.UpdateUserProfile(u.ID, name, email, string(lang), engagement)
+	if errors.Is(err, store.ErrEmailTaken) {
+		http.Redirect(w, r, "/profile?err=email_taken", http.StatusSeeOther)
+		return
+	}
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/profile?saved=profile", http.StatusSeeOther)
+}
+
+func (s *Server) updatePassword(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	current := r.FormValue("current_password")
+	next := r.FormValue("new_password")
+	if len(next) < 12 {
+		http.Redirect(w, r, "/profile?err=new_password", http.StatusSeeOther)
+		return
+	}
+	hash, err := s.store.UserPasswordHash(u.ID)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if !auth.VerifyPassword(current, hash) {
+		http.Redirect(w, r, "/profile?err=current_password", http.StatusSeeOther)
+		return
+	}
+	newHash, err := auth.HashPassword(next)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	c, err := r.Cookie("sinau_session")
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if err := s.store.UpdateUserPassword(u.ID, newHash, c.Value); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/profile?saved=password", http.StatusSeeOther)
+}
+
+func (s *Server) revokeOtherSessions(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	c, err := r.Cookie("sinau_session")
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if _, err := s.store.RevokeOtherSessions(u.ID, c.Value); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/profile?saved=sessions", http.StatusSeeOther)
+}
+
+// dispatchReportComment fires an engagement notification to the report
+// author when someone else posts a comment on it. Self-comments are
+// dropped — no point notifying yourself.
+func (s *Server) dispatchReportComment(rep domain.Report, commenter *domain.User, body, commentID, roomID, reportID string) {
+	if s.engagement == nil || rep.UserID == commenter.ID {
+		return
+	}
+	room, _, ok := s.store.RoomAccess(roomID, rep.UserID)
+	if !ok {
+		return
+	}
+	go s.engagement.Dispatch(context.Background(), reminder.EngagementEvent{
+		Kind:         reminder.EngagementReportComment,
+		RecipientID:  rep.UserID,
+		ActorName:    commenter.Name,
+		RoomID:       roomID,
+		RoomName:     room.Name,
+		RoomMode:     room.Mode,
+		Snippet:      reminder.Snippet(body, 240),
+		DeepLinkPath: "/rooms/" + roomID + "/reports/" + reportID,
+	})
+}
+
+// dispatchSubmissionMade notifies every mentor in the room that a
+// student has submitted (or resubmitted) an assignment.
+func (s *Server) dispatchSubmissionMade(student *domain.User, roomID, assignmentTitle string) {
+	if s.engagement == nil {
+		return
+	}
+	room, _, ok := s.store.RoomAccess(roomID, student.ID)
+	if !ok {
+		return
+	}
+	mentorIDs, err := s.store.MentorIDs(roomID)
+	if err != nil {
+		log.Printf("dispatchSubmissionMade mentorIDs room=%s: %v", roomID, err)
+		return
+	}
+	for _, mid := range mentorIDs {
+		mid := mid
+		go s.engagement.Dispatch(context.Background(), reminder.EngagementEvent{
+			Kind:         reminder.EngagementSubmissionMade,
+			RecipientID:  mid,
+			ActorName:    student.Name,
+			RoomID:       roomID,
+			RoomName:     room.Name,
+			RoomMode:     room.Mode,
+			Title:        assignmentTitle,
+			DeepLinkPath: "/rooms/" + roomID,
+		})
+	}
+}
+
+// dispatchFeedbackPosted notifies the student that the teacher has
+// reviewed (or asked them to revise) their submission. Score is
+// included on "reviewed" outcomes when provided.
+func (s *Server) dispatchFeedbackPosted(studentID, roomID, assignmentTitle, feedback, score string) {
+	if s.engagement == nil || studentID == "" {
+		return
+	}
+	room, _, ok := s.store.RoomAccess(roomID, studentID)
+	if !ok {
+		return
+	}
+	go s.engagement.Dispatch(context.Background(), reminder.EngagementEvent{
+		Kind:         reminder.EngagementFeedbackPosted,
+		RecipientID:  studentID,
+		RoomID:       roomID,
+		RoomName:     room.Name,
+		RoomMode:     room.Mode,
+		Title:        assignmentTitle,
+		Score:        score,
+		Snippet:      reminder.Snippet(feedback, 240),
+		DeepLinkPath: "/rooms/" + roomID,
+	})
+}
+
+// --- Edit/delete handlers -------------------------------------------------
+//
+// These all share the same pattern: load the resource, verify the
+// viewer is the author OR a mentor in the room, mutate the row, then
+// redirect back. Reads of the underlying resources already filter
+// deleted_at, so a deleted row is effectively a 404 on subsequent
+// page loads.
+
+func (s *Server) editReportForm(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, reportID := r.PathValue("roomID"), r.PathValue("reportID")
+	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	rep, err := s.store.ReportByID(roomID, reportID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if rep.UserID != u.ID && role != domain.RoleMentor {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	rm.Role = role
+	pd := s.pageData(r, "title.report.edit")
+	pd.Room = rm
+	pd.Report = rep
+	s.render(w, "report_edit", pd)
+}
+
+func (s *Server) editReport(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, reportID := r.PathValue("roomID"), r.PathValue("reportID")
+	_, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	rep, err := s.store.ReportByID(roomID, reportID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if rep.UserID != u.ID && role != domain.RoleMentor {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	links, err := collectLinks(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	learned := auth.Clean(r.FormValue("learned"), 2000)
+	practiced := auth.Clean(r.FormValue("practiced"), 2000)
+	nextPlan := auth.Clean(r.FormValue("next_plan"), 2000)
+	blocker := auth.Clean(r.FormValue("blocker"), 2000)
+	if learned == "" || practiced == "" || nextPlan == "" {
+		http.Error(w, "learned, practiced, and next plan are required", http.StatusBadRequest)
+		return
+	}
+	updated, err := s.store.UpdateReport(reportID, learned, practiced, blocker, nextPlan, links)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if !updated {
+		http.NotFound(w, r)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID+"/reports/"+reportID, http.StatusSeeOther)
+}
+
+func (s *Server) deleteReport(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, reportID := r.PathValue("roomID"), r.PathValue("reportID")
+	_, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	rep, err := s.store.ReportByID(roomID, reportID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if rep.UserID != u.ID && role != domain.RoleMentor {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if _, err := s.store.DeleteReport(reportID); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
+func (s *Server) editComment(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, reportID, commentID := r.PathValue("roomID"), r.PathValue("reportID"), r.PathValue("commentID")
+	_, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	authorID, parentReport, err := s.store.CommentAuthor(commentID)
+	if err != nil || parentReport != reportID {
+		http.NotFound(w, r)
+		return
+	}
+	if authorID != u.ID && role != domain.RoleMentor {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	body := auth.Clean(r.FormValue("body"), 2000)
+	if body == "" {
+		http.Error(w, "comment required", http.StatusBadRequest)
+		return
+	}
+	if _, err := s.store.EditComment(commentID, body); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID+"/reports/"+reportID, http.StatusSeeOther)
+}
+
+func (s *Server) deleteComment(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, reportID, commentID := r.PathValue("roomID"), r.PathValue("reportID"), r.PathValue("commentID")
+	_, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	authorID, parentReport, err := s.store.CommentAuthor(commentID)
+	if err != nil || parentReport != reportID {
+		http.NotFound(w, r)
+		return
+	}
+	if authorID != u.ID && role != domain.RoleMentor {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if _, err := s.store.DeleteComment(commentID); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID+"/reports/"+reportID, http.StatusSeeOther)
+}
+
+func (s *Server) editTaskForm(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, taskID := r.PathValue("roomID"), r.PathValue("taskID")
+	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok || role != domain.RoleMentor {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	t, err := s.store.TaskByID(roomID, taskID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	rm.Role = role
+	pd := s.pageData(r, "title.task.edit")
+	pd.Room = rm
+	pd.Task = t
+	s.render(w, "task_edit", pd)
+}
+
+func (s *Server) editTask(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, taskID := r.PathValue("roomID"), r.PathValue("taskID")
+	_, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok || role != domain.RoleMentor {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	title := auth.Clean(r.FormValue("title"), 180)
+	detail := auth.Clean(r.FormValue("detail"), 1200)
+	dueDate := auth.Clean(r.FormValue("due_date"), 10)
+	if title == "" {
+		http.Error(w, "task title required", http.StatusBadRequest)
+		return
+	}
+	if dueDate != "" {
+		if _, err := time.Parse("2006-01-02", dueDate); err != nil {
+			http.Error(w, "due date must use YYYY-MM-DD", http.StatusBadRequest)
+			return
+		}
+	}
+	updated, err := s.store.UpdateTask(taskID, title, detail, dueDate)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if !updated {
+		http.Error(w, "task is not editable (already reviewed or removed)", http.StatusConflict)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
+func (s *Server) deleteTask(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, taskID := r.PathValue("roomID"), r.PathValue("taskID")
+	_, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok || role != domain.RoleMentor {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if _, err := s.store.DeleteTask(taskID); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
+func (s *Server) editAssignmentForm(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, assignmentID := r.PathValue("roomID"), r.PathValue("assignmentID")
+	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	a, err := s.store.AssignmentByID(roomID, assignmentID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	rm.Role = role
+	pd := s.pageData(r, "title.assignment.edit")
+	pd.Room = rm
+	pd.Assignment = a
+	s.render(w, "assignment_edit", pd)
+}
+
+func (s *Server) editAssignment(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, assignmentID := r.PathValue("roomID"), r.PathValue("assignmentID")
+	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	title := auth.Clean(r.FormValue("title"), 180)
+	instructions := auth.Clean(r.FormValue("instructions"), 2000)
+	resourceURL := auth.Clean(r.FormValue("resource_url"), 400)
+	dueDate := auth.Clean(r.FormValue("due_date"), 10)
+	if title == "" || instructions == "" || dueDate == "" {
+		http.Error(w, "title, instructions, and deadline are required", http.StatusBadRequest)
+		return
+	}
+	if _, err := time.Parse("2006-01-02", dueDate); err != nil {
+		http.Error(w, "deadline must use YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+	if resourceURL != "" && !auth.ValidExternalURL(resourceURL) {
+		http.Error(w, "resource link must be an http or https URL", http.StatusBadRequest)
+		return
+	}
+	updated, err := s.store.UpdateAssignment(assignmentID, title, instructions, resourceURL, dueDate)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if !updated {
+		http.NotFound(w, r)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
+func (s *Server) deleteAssignment(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, assignmentID := r.PathValue("roomID"), r.PathValue("assignmentID")
+	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if _, err := s.store.DeleteAssignment(assignmentID); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
 }

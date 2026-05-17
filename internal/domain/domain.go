@@ -24,10 +24,11 @@ func ValidRoomMode(s string) bool {
 }
 
 type User struct {
-	ID       string
-	Name     string
-	Email    string
-	Language string
+	ID                string
+	Name              string
+	Email             string
+	Language          string
+	EngagementEnabled bool
 }
 
 type Room struct {
@@ -137,6 +138,7 @@ type Report struct {
 	NextPlan  string
 	Links     []Link
 	CreatedAt string
+	EditedAt  string
 	Comments  int
 }
 
@@ -152,9 +154,11 @@ type Link struct {
 
 type Comment struct {
 	ID        string
+	AuthorID  string
 	Author    string
 	Body      string
 	CreatedAt string
+	EditedAt  string
 }
 
 type Task struct {
@@ -164,9 +168,11 @@ type Task struct {
 	Status        string
 	Assignee      string
 	AssigneeID    string
+	AssignedByID  string
 	DueDate       string
 	DueState      string
 	CreatedAt     string
+	EditedAt      string
 	PointsAwarded int
 	ReviewedAt    string
 	ReviewedBy    string
@@ -187,6 +193,7 @@ type Assignment struct {
 	ResourceURL        string
 	DueDate            string
 	CreatedAt          string
+	EditedAt           string
 	Submitted          int
 	TotalMentees       int
 	MySubmissionStatus string

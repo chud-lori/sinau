@@ -105,6 +105,56 @@ func buildAssignmentBody(lang i18n.Lang, to Recipient, rem domain.AssignmentRemi
 	return b.String()
 }
 
+func (e *EmailNotifier) NotifyEngagement(ctx context.Context, to Recipient, ev EngagementEvent) error {
+	if !e.Configured() {
+		log.Printf("email notifier not configured (SINAU_SMTP_HOST/From unset); routing to fallback")
+		return e.fallback.NotifyEngagement(ctx, to, ev)
+	}
+	if to.Email == "" {
+		return fmt.Errorf("recipient %s has no email address", to.UserID)
+	}
+	lang := recipientLang(to)
+	subject := engagementSubject(lang, ev)
+	body := buildEngagementBody(lang, to, ev)
+	return e.send(ctx, to.Email, subject, body)
+}
+
+// engagementSubject picks the localised subject line for an engagement
+// event. Defined once here so all delivery channels share wording.
+func engagementSubject(lang i18n.Lang, ev EngagementEvent) string {
+	switch ev.Kind {
+	case EngagementReportComment:
+		return i18n.Tf(lang, "notif.report_comment.subject", ev.ActorName, ev.RoomName)
+	case EngagementSubmissionMade:
+		return i18n.Tf(lang, "notif.submission_made.subject", ev.ActorName, ev.Title)
+	case EngagementFeedbackPosted:
+		return i18n.Tf(lang, "notif.feedback_posted.subject", ev.Title)
+	}
+	return "Sinau update"
+}
+
+func buildEngagementBody(lang i18n.Lang, to Recipient, ev EngagementEvent) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", i18n.Tf(lang, "notif.engagement.greeting", to.Name))
+	switch ev.Kind {
+	case EngagementReportComment:
+		fmt.Fprintf(&b, "%s\n\n", i18n.Tf(lang, "notif.report_comment.body", ev.ActorName, ev.RoomName))
+	case EngagementSubmissionMade:
+		fmt.Fprintf(&b, "%s\n\n", i18n.Tf(lang, "notif.submission_made.body", ev.ActorName, ev.Title, ev.RoomName))
+	case EngagementFeedbackPosted:
+		if ev.Score != "" {
+			fmt.Fprintf(&b, "%s\n\n", i18n.Tf(lang, "notif.feedback_posted.body_score", ev.Title, ev.Score))
+		} else {
+			fmt.Fprintf(&b, "%s\n\n", i18n.Tf(lang, "notif.feedback_posted.body", ev.Title))
+		}
+	}
+	if ev.Snippet != "" {
+		fmt.Fprintf(&b, "%s\n%s\n\n", i18n.T(lang, "notif.engagement.snippet"), ev.Snippet)
+	}
+	fmt.Fprintf(&b, "%s\n\n%s\n", i18n.T(lang, "notif.engagement.footer"), i18n.T(lang, "notif.task_due.signature"))
+	return b.String()
+}
+
 // send dials SMTP, optionally upgrades with STARTTLS, authenticates with
 // PLAIN, and hands the message off. Wraps the dial in ctx so a hung relay
 // does not block the worker forever.
