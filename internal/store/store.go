@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,6 +84,7 @@ var schemaV1 = []string{
 		can_create_rooms INTEGER NOT NULL DEFAULT 0,
 		language TEXT NOT NULL DEFAULT 'en',
 		engagement_notif_enabled INTEGER NOT NULL DEFAULT 1,
+		onboarded_at TEXT NOT NULL DEFAULT '',
 		created_at TEXT NOT NULL
 	)`,
 	`CREATE TABLE IF NOT EXISTS sessions (
@@ -228,6 +230,98 @@ var schemaV1 = []string{
 	`CREATE INDEX IF NOT EXISTS idx_submission_links_submission ON submission_links(submission_id, position)`,
 	`CREATE INDEX IF NOT EXISTS idx_points_ledger_user ON points_ledger(user_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_points_ledger_room_user ON points_ledger(room_id, user_id)`,
+
+	// Full-text search (FTS5). One virtual table per searchable resource.
+	// We use the simple non-external-content shape so the source row's
+	// TEXT id can live alongside the indexed columns. `source_id` is
+	// UNINDEXED — it's only there so search hits can be joined back to
+	// the real row. Triggers below keep each FTS table in lock-step with
+	// its source on INSERT/UPDATE/DELETE.
+	`CREATE VIRTUAL TABLE IF NOT EXISTS reports_fts USING fts5(
+		source_id UNINDEXED, room_id UNINDEXED, user_id UNINDEXED,
+		learned, practiced, blocker, next_plan,
+		tokenize='unicode61 remove_diacritics 2')`,
+	`CREATE VIRTUAL TABLE IF NOT EXISTS comments_fts USING fts5(
+		source_id UNINDEXED, report_id UNINDEXED, user_id UNINDEXED,
+		body,
+		tokenize='unicode61 remove_diacritics 2')`,
+	`CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
+		source_id UNINDEXED, room_id UNINDEXED, assigned_to UNINDEXED,
+		title, detail,
+		tokenize='unicode61 remove_diacritics 2')`,
+	`CREATE VIRTUAL TABLE IF NOT EXISTS assignments_fts USING fts5(
+		source_id UNINDEXED, room_id UNINDEXED,
+		title, instructions,
+		tokenize='unicode61 remove_diacritics 2')`,
+	`CREATE VIRTUAL TABLE IF NOT EXISTS submissions_fts USING fts5(
+		source_id UNINDEXED, assignment_id UNINDEXED, student_id UNINDEXED,
+		note, feedback,
+		tokenize='unicode61 remove_diacritics 2')`,
+
+	// Sync triggers. Soft-delete is an UPDATE (deleted_at goes non-empty),
+	// so AFTER UPDATE re-syncs the row. The search query filters
+	// deleted_at on the source-table join, which is cheaper than
+	// maintaining a separate "deleted from FTS" trigger.
+	`CREATE TRIGGER IF NOT EXISTS reports_ai AFTER INSERT ON reports BEGIN
+		INSERT INTO reports_fts(source_id, room_id, user_id, learned, practiced, blocker, next_plan)
+		VALUES (new.id, new.room_id, new.user_id, new.learned, new.practiced, new.blocker, new.next_plan);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS reports_ad AFTER DELETE ON reports BEGIN
+		DELETE FROM reports_fts WHERE source_id = old.id;
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS reports_au AFTER UPDATE ON reports BEGIN
+		DELETE FROM reports_fts WHERE source_id = old.id;
+		INSERT INTO reports_fts(source_id, room_id, user_id, learned, practiced, blocker, next_plan)
+		VALUES (new.id, new.room_id, new.user_id, new.learned, new.practiced, new.blocker, new.next_plan);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS comments_ai AFTER INSERT ON comments BEGIN
+		INSERT INTO comments_fts(source_id, report_id, user_id, body)
+		VALUES (new.id, new.report_id, new.user_id, new.body);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS comments_ad AFTER DELETE ON comments BEGIN
+		DELETE FROM comments_fts WHERE source_id = old.id;
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS comments_au AFTER UPDATE ON comments BEGIN
+		DELETE FROM comments_fts WHERE source_id = old.id;
+		INSERT INTO comments_fts(source_id, report_id, user_id, body)
+		VALUES (new.id, new.report_id, new.user_id, new.body);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS tasks_ai AFTER INSERT ON tasks BEGIN
+		INSERT INTO tasks_fts(source_id, room_id, assigned_to, title, detail)
+		VALUES (new.id, new.room_id, new.assigned_to, new.title, new.detail);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS tasks_ad AFTER DELETE ON tasks BEGIN
+		DELETE FROM tasks_fts WHERE source_id = old.id;
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS tasks_au AFTER UPDATE ON tasks BEGIN
+		DELETE FROM tasks_fts WHERE source_id = old.id;
+		INSERT INTO tasks_fts(source_id, room_id, assigned_to, title, detail)
+		VALUES (new.id, new.room_id, new.assigned_to, new.title, new.detail);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS assignments_ai AFTER INSERT ON assignments BEGIN
+		INSERT INTO assignments_fts(source_id, room_id, title, instructions)
+		VALUES (new.id, new.room_id, new.title, new.instructions);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS assignments_ad AFTER DELETE ON assignments BEGIN
+		DELETE FROM assignments_fts WHERE source_id = old.id;
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS assignments_au AFTER UPDATE ON assignments BEGIN
+		DELETE FROM assignments_fts WHERE source_id = old.id;
+		INSERT INTO assignments_fts(source_id, room_id, title, instructions)
+		VALUES (new.id, new.room_id, new.title, new.instructions);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS submissions_ai AFTER INSERT ON submissions BEGIN
+		INSERT INTO submissions_fts(source_id, assignment_id, student_id, note, feedback)
+		VALUES (new.id, new.assignment_id, new.student_id, new.note, new.feedback);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS submissions_ad AFTER DELETE ON submissions BEGIN
+		DELETE FROM submissions_fts WHERE source_id = old.id;
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS submissions_au AFTER UPDATE ON submissions BEGIN
+		DELETE FROM submissions_fts WHERE source_id = old.id;
+		INSERT INTO submissions_fts(source_id, assignment_id, student_id, note, feedback)
+		VALUES (new.id, new.assignment_id, new.student_id, new.note, new.feedback);
+	END`,
 }
 
 func (s *Store) applyMigration(version int, stmts []string) error {
@@ -337,11 +431,11 @@ func (s *Store) DeleteSession(token string) error {
 
 func (s *Store) CurrentUser(token string) (*domain.User, error) {
 	var u domain.User
-	var expires string
+	var expires, onboardedAt string
 	var engagement int
-	err := s.db.QueryRow(`SELECT u.id, u.name, u.email, u.language, u.engagement_notif_enabled, s.expires_at
+	err := s.db.QueryRow(`SELECT u.id, u.name, u.email, u.language, u.engagement_notif_enabled, u.onboarded_at, s.expires_at
 		FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.id_hash = ?`, auth.HashToken(token)).Scan(&u.ID, &u.Name, &u.Email, &u.Language, &engagement, &expires)
+		WHERE s.id_hash = ?`, auth.HashToken(token)).Scan(&u.ID, &u.Name, &u.Email, &u.Language, &engagement, &onboardedAt, &expires)
 	if err != nil {
 		return nil, err
 	}
@@ -350,6 +444,7 @@ func (s *Store) CurrentUser(token string) (*domain.User, error) {
 		return nil, errors.New("expired session")
 	}
 	u.EngagementEnabled = engagement == 1
+	u.Onboarded = onboardedAt != ""
 	return &u, nil
 }
 
@@ -359,13 +454,25 @@ func (s *Store) CurrentUser(token string) (*domain.User, error) {
 func (s *Store) UserByID(userID string) (*domain.User, error) {
 	var u domain.User
 	var engagement int
-	err := s.db.QueryRow(`SELECT id, name, email, language, engagement_notif_enabled FROM users WHERE id = ?`,
-		userID).Scan(&u.ID, &u.Name, &u.Email, &u.Language, &engagement)
+	var onboardedAt string
+	err := s.db.QueryRow(`SELECT id, name, email, language, engagement_notif_enabled, onboarded_at FROM users WHERE id = ?`,
+		userID).Scan(&u.ID, &u.Name, &u.Email, &u.Language, &engagement, &onboardedAt)
 	if err != nil {
 		return nil, err
 	}
 	u.EngagementEnabled = engagement == 1
+	u.Onboarded = onboardedAt != ""
 	return &u, nil
+}
+
+// MarkOnboarded stamps users.onboarded_at so the onboarding page
+// stops auto-redirecting on subsequent home visits. Idempotent — the
+// COALESCE keeps the original timestamp if the user revisits the
+// onboarding URL after completing it.
+func (s *Store) MarkOnboarded(userID string) error {
+	_, err := s.db.Exec(`UPDATE users SET onboarded_at = COALESCE(NULLIF(onboarded_at, ''), ?) WHERE id = ?`,
+		auth.Now(), userID)
+	return err
 }
 
 // SetUserLanguage persists the user's preferred UI language. Validation of
@@ -1968,6 +2075,546 @@ func (s *Store) UserRankInRoom(userID, roomID string) (domain.Rank, error) {
 		}
 	}
 	return r, nil
+}
+
+// Search runs a single full-text query across reports, comments, tasks,
+// assignments, and submissions, scoped to rows the user is allowed to
+// see. Returns at most limit hits per source, ordered by FTS5 BM25 rank.
+//
+// Visibility per source mirrors the existing room views:
+//   - reports:      mentors see all room reports, mentees only their own
+//   - comments:     all room members
+//   - tasks:        mentors see all room tasks, mentees only assigned-to-them
+//   - assignments:  all classroom-room members
+//   - submissions:  teachers see all in their classroom rooms; students see their own
+//
+// The query string is passed as-is to FTS5 (which supports prefix
+// matching with `term*`, phrase queries with `"two words"`, etc.).
+// Callers should sanitize untrusted input upstream — at minimum
+// rejecting empty or whitespace-only strings.
+func (s *Store) Search(userID, query string, limit int) ([]domain.SearchHit, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	q := sanitizeFTSQuery(query)
+	if q == "" {
+		return nil, nil
+	}
+	const sql = `
+		-- Reports
+		SELECT 'report' AS kind, r.id, r.room_id, rm.name, rm.mode,
+			COALESCE(u.name, '') AS author, COALESCE(u.name, '') AS title,
+			snippet(reports_fts, -1, char(2), char(3), '…', 24) AS snip,
+			r.created_at, bm25(reports_fts) AS rk
+		FROM reports_fts
+		JOIN reports r ON r.id = reports_fts.source_id
+		JOIN rooms rm ON rm.id = r.room_id
+		JOIN users u ON u.id = r.user_id
+		JOIN memberships m ON m.room_id = r.room_id AND m.user_id = ?
+		WHERE reports_fts MATCH ?
+		  AND r.deleted_at = ''
+		  AND (m.role = 'mentor' OR r.user_id = ?)
+		UNION ALL
+		-- Comments
+		SELECT 'comment', c.id, rm.id, rm.name, rm.mode,
+			COALESCE(u.name, ''), COALESCE(u.name, ''),
+			snippet(comments_fts, -1, char(2), char(3), '…', 24),
+			c.created_at, bm25(comments_fts)
+		FROM comments_fts
+		JOIN comments c ON c.id = comments_fts.source_id
+		JOIN reports r ON r.id = c.report_id
+		JOIN rooms rm ON rm.id = r.room_id
+		JOIN users u ON u.id = c.user_id
+		JOIN memberships m ON m.room_id = r.room_id AND m.user_id = ?
+		WHERE comments_fts MATCH ?
+		  AND c.deleted_at = ''
+		  AND r.deleted_at = ''
+		UNION ALL
+		-- Tasks
+		SELECT 'task', t.id, t.room_id, rm.name, rm.mode,
+			COALESCE(u.name, ''), t.title,
+			snippet(tasks_fts, -1, char(2), char(3), '…', 24),
+			t.created_at, bm25(tasks_fts)
+		FROM tasks_fts
+		JOIN tasks t ON t.id = tasks_fts.source_id
+		JOIN rooms rm ON rm.id = t.room_id
+		JOIN users u ON u.id = t.assigned_to
+		JOIN memberships m ON m.room_id = t.room_id AND m.user_id = ?
+		WHERE tasks_fts MATCH ?
+		  AND t.deleted_at = ''
+		  AND (m.role = 'mentor' OR t.assigned_to = ?)
+		UNION ALL
+		-- Assignments
+		SELECT 'assignment', a.id, a.room_id, rm.name, rm.mode,
+			'', a.title,
+			snippet(assignments_fts, -1, char(2), char(3), '…', 24),
+			a.created_at, bm25(assignments_fts)
+		FROM assignments_fts
+		JOIN assignments a ON a.id = assignments_fts.source_id
+		JOIN rooms rm ON rm.id = a.room_id
+		JOIN memberships m ON m.room_id = a.room_id AND m.user_id = ?
+		WHERE assignments_fts MATCH ?
+		  AND a.deleted_at = ''
+		  AND rm.mode = 'classroom'
+		UNION ALL
+		-- Submissions
+		SELECT 'submission', sub.id, rm.id, rm.name, rm.mode,
+			COALESCE(u.name, ''), a.title,
+			snippet(submissions_fts, -1, char(2), char(3), '…', 24),
+			sub.submitted_at, bm25(submissions_fts)
+		FROM submissions_fts
+		JOIN submissions sub ON sub.id = submissions_fts.source_id
+		JOIN assignments a ON a.id = sub.assignment_id
+		JOIN rooms rm ON rm.id = a.room_id
+		JOIN users u ON u.id = sub.student_id
+		JOIN memberships m ON m.room_id = a.room_id AND m.user_id = ?
+		WHERE submissions_fts MATCH ?
+		  AND a.deleted_at = ''
+		  AND (m.role = 'mentor' OR sub.student_id = ?)
+		ORDER BY rk
+		LIMIT ?`
+	rows, err := s.db.Query(sql,
+		userID, q, userID,
+		userID, q,
+		userID, q, userID,
+		userID, q,
+		userID, q, userID,
+		limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.SearchHit
+	for rows.Next() {
+		var h domain.SearchHit
+		var rk float64
+		if err := rows.Scan(&h.Kind, &h.ID, &h.RoomID, &h.RoomName, &h.RoomMode, &h.Author, &h.Title, &h.Snippet, &h.CreatedAt, &rk); err != nil {
+			return nil, err
+		}
+		h.DeepLinkPath = searchDeepLink(h)
+		if h.Kind == "report" || h.Kind == "comment" {
+			h.Title = "Report by " + h.Author
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+func searchDeepLink(h domain.SearchHit) string {
+	switch h.Kind {
+	case "report":
+		return "/rooms/" + h.RoomID + "/reports/" + h.ID
+	case "comment":
+		// comments live on a report — caller knows roomID; we used
+		// h.ID for the comment id, but the SQL above puts the
+		// comment's id in ID. We don't store the report id on the
+		// hit struct since the link goes back to the room view as a
+		// reasonable approximation. A future iteration can fan out
+		// to the exact report.
+		return "/rooms/" + h.RoomID
+	case "task", "submission":
+		return "/rooms/" + h.RoomID
+	case "assignment":
+		return "/rooms/" + h.RoomID
+	}
+	return "/rooms/" + h.RoomID
+}
+
+// sanitizeFTSQuery turns user input into an FTS5-safe MATCH expression.
+// It strips characters that have syntactic meaning in FTS5 (so a paste
+// like "what?!" doesn't crash the parser) and turns the trimmed result
+// into a prefix-match query when the user types a single bare word,
+// since "hand" matching "handwriting" is what most search UIs do today.
+func sanitizeFTSQuery(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	// FTS5 treats these as operators / column markers; strip them.
+	for _, ch := range []string{"\"", "'", ":", "(", ")", "*", "+", "-", "^"} {
+		s = strings.ReplaceAll(s, ch, " ")
+	}
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return ""
+	}
+	// Single-word queries become prefix matches.
+	if len(fields) == 1 {
+		return fields[0] + "*"
+	}
+	// Multi-word queries: AND every term (FTS5 default is implicit AND).
+	return strings.Join(fields, " ")
+}
+
+// CoachMetrics computes the self-performance numbers behind
+// /me/coaching. Pure aggregate query over existing tables — no new
+// rows. The window param is the trailing day count (typically 30 or
+// 90); a window <= 0 means "all time".
+func (s *Store) CoachMetrics(userID string, windowDays int) (domain.CoachMetrics, error) {
+	m := domain.CoachMetrics{WindowDays: windowDays}
+	windowStart := ""
+	if windowDays > 0 {
+		windowStart = time.Now().UTC().AddDate(0, 0, -windowDays).Format(time.RFC3339)
+	}
+
+	// Comments the mentor left in rooms they mentor.
+	q1 := `SELECT COUNT(*) FROM comments c
+		JOIN reports r ON r.id = c.report_id
+		JOIN memberships m ON m.room_id = r.room_id AND m.user_id = ? AND m.role = 'mentor'
+		WHERE c.user_id = ? AND c.deleted_at = ''`
+	args1 := []any{userID, userID}
+	if windowStart != "" {
+		q1 += ` AND c.created_at >= ?`
+		args1 = append(args1, windowStart)
+	}
+	if err := s.db.QueryRow(q1, args1...).Scan(&m.CommentsLeft); err != nil {
+		return m, err
+	}
+
+	// % of submissions reviewed in classrooms this mentor leads.
+	q2 := `SELECT
+			SUM(CASE WHEN sub.reviewed_at != '' THEN 1 ELSE 0 END) AS reviewed,
+			COUNT(*) AS total
+		FROM submissions sub
+		JOIN assignments a ON a.id = sub.assignment_id AND a.deleted_at = ''
+		JOIN memberships m ON m.room_id = a.room_id AND m.user_id = ? AND m.role = 'mentor'`
+	args2 := []any{userID}
+	if windowStart != "" {
+		q2 += ` WHERE sub.submitted_at >= ?`
+		args2 = append(args2, windowStart)
+	}
+	if err := s.db.QueryRow(q2, args2...).Scan(&m.SubmissionsReviewed, &m.SubmissionsTotal); err != nil {
+		return m, err
+	}
+
+	// Avg hours to the mentor's first comment on a report in their rooms.
+	// For each report, find the earliest comment by *this* mentor and
+	// take (comment_ts - report_ts) in hours. Average across reports
+	// where such a comment exists.
+	q3 := `SELECT
+			COALESCE(AVG((julianday(first_c) - julianday(rp.created_at)) * 24), 0) AS avg_h,
+			COUNT(*) AS hits
+		FROM (
+			SELECT c.report_id, MIN(c.created_at) AS first_c
+			FROM comments c
+			WHERE c.user_id = ? AND c.deleted_at = ''
+			GROUP BY c.report_id
+		) AS fc
+		JOIN reports rp ON rp.id = fc.report_id AND rp.deleted_at = ''
+		JOIN memberships m ON m.room_id = rp.room_id AND m.user_id = ? AND m.role = 'mentor'`
+	args3 := []any{userID, userID}
+	if windowStart != "" {
+		q3 += ` WHERE rp.created_at >= ?`
+		args3 = append(args3, windowStart)
+	}
+	if err := s.db.QueryRow(q3, args3...).Scan(&m.AvgFirstCommentHours, &m.FirstCommentCount); err != nil {
+		return m, err
+	}
+
+	// Active vs lapsed mentees — "active" means they've posted a report
+	// or moved a task in the last 14 days.
+	const lapseDays = 14
+	cutoff := time.Now().UTC().AddDate(0, 0, -lapseDays).Format(time.RFC3339)
+	if err := s.db.QueryRow(`SELECT
+			SUM(CASE WHEN lr.last_activity >= ? THEN 1 ELSE 0 END) AS active,
+			SUM(CASE WHEN lr.last_activity < ? OR lr.last_activity IS NULL THEN 1 ELSE 0 END) AS lapsed
+		FROM (
+			SELECT ml.user_id, MAX(activity) AS last_activity FROM (
+				SELECT rp.user_id, rp.created_at AS activity FROM reports rp WHERE rp.deleted_at = ''
+				UNION ALL
+				SELECT t.assigned_to, t.updated_at FROM tasks t WHERE t.deleted_at = ''
+				UNION ALL
+				SELECT sub.student_id, sub.submitted_at FROM submissions sub
+			) ml GROUP BY ml.user_id
+		) lr
+		JOIN memberships mm ON mm.user_id = lr.user_id AND mm.role = 'mentee'
+		WHERE mm.room_id IN (SELECT room_id FROM memberships WHERE user_id = ? AND role = 'mentor')`,
+		cutoff, cutoff, userID).Scan(&m.ActiveMentees, &m.LapsedMentees); err != nil {
+		return m, err
+	}
+	return m, nil
+}
+
+// GrowthMetrics builds the read-model behind /me/growth. windowWeeks
+// must be > 0; weeks below the window are zero-padded so the sparkline
+// always has the same shape. Topic frequency uses a small stopword
+// list — good enough for v1, not a real NLP pipeline.
+func (s *Store) GrowthMetrics(userID string, windowWeeks int) (domain.GrowthMetrics, error) {
+	if windowWeeks <= 0 {
+		windowWeeks = 12
+	}
+	g := domain.GrowthMetrics{WindowWeeks: windowWeeks}
+	cutoff := time.Now().UTC().AddDate(0, 0, -windowWeeks*7).Format(time.RFC3339)
+
+	// Reports per week (last N weeks).
+	type weekRow struct {
+		weekStart string
+		count     int
+	}
+	rows, err := s.db.Query(`SELECT strftime('%Y-%W', created_at) AS wk, COUNT(*)
+		FROM reports
+		WHERE user_id = ? AND deleted_at = '' AND created_at >= ?
+		GROUP BY wk
+		ORDER BY wk`, userID, cutoff)
+	if err != nil {
+		return g, err
+	}
+	counts := map[string]int{}
+	for rows.Next() {
+		var wr weekRow
+		if err := rows.Scan(&wr.weekStart, &wr.count); err != nil {
+			rows.Close()
+			return g, err
+		}
+		counts[wr.weekStart] = wr.count
+		g.ReportsAll += wr.count
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return g, err
+	}
+
+	// Build the windowed buckets. Iterate the last N ISO weeks from now
+	// backwards so zero-weeks render as gaps.
+	now := time.Now().UTC()
+	for i := windowWeeks - 1; i >= 0; i-- {
+		d := now.AddDate(0, 0, -i*7)
+		year, week := d.ISOWeek()
+		key := fmt.Sprintf("%04d-%02d", year, week)
+		// Anchor label = Monday of that ISO week.
+		monday := isoMonday(d)
+		g.Weeks = append(g.Weeks, domain.WeekCount{
+			Label: monday.Format("Jan 2"),
+			Count: counts[key],
+		})
+	}
+
+	// Streak: consecutive weeks ending with the current week that have count > 0.
+	for i := len(g.Weeks) - 1; i >= 0; i-- {
+		if g.Weeks[i].Count > 0 {
+			g.Streak++
+		} else {
+			break
+		}
+	}
+
+	// Task completion rate in the window.
+	if err := s.db.QueryRow(`SELECT
+			SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done,
+			SUM(CASE WHEN status != 'done' THEN 1 ELSE 0 END) AS open
+		FROM tasks WHERE assigned_to = ? AND deleted_at = '' AND created_at >= ?`,
+		userID, cutoff).Scan(&g.TaskDone, &g.TaskOpen); err != nil {
+		return g, err
+	}
+	if total := g.TaskDone + g.TaskOpen; total > 0 {
+		g.TaskRate = float64(g.TaskDone) / float64(total)
+	}
+
+	// Blocker count in the window (helps the mentee see they're clearing them).
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM reports
+		WHERE user_id = ? AND deleted_at = '' AND blocker != '' AND created_at >= ?`,
+		userID, cutoff).Scan(&g.Blockers); err != nil {
+		return g, err
+	}
+
+	// Topic frequency from learned + blocker. Small in-memory job — we
+	// only ever pull this user's own reports, capped by the window.
+	topicRows, err := s.db.Query(`SELECT learned, blocker FROM reports
+		WHERE user_id = ? AND deleted_at = '' AND created_at >= ?`, userID, cutoff)
+	if err != nil {
+		return g, err
+	}
+	defer topicRows.Close()
+	freq := map[string]int{}
+	for topicRows.Next() {
+		var learned, blocker string
+		if err := topicRows.Scan(&learned, &blocker); err != nil {
+			return g, err
+		}
+		addWords(freq, learned)
+		addWords(freq, blocker)
+	}
+	if err := topicRows.Err(); err != nil {
+		return g, err
+	}
+	g.Topics = topTopics(freq, 10)
+	return g, nil
+}
+
+// isoMonday returns the Monday of the ISO week containing d, in UTC.
+func isoMonday(d time.Time) time.Time {
+	wd := int(d.Weekday())
+	if wd == 0 {
+		wd = 7
+	}
+	return d.AddDate(0, 0, -(wd - 1)).UTC()
+}
+
+// stopwords is a minimal English+Indonesian list, intentionally short.
+// The growth dashboard is a self-reflection tool, not a research one —
+// some noise is fine and the user can read past it.
+var stopwords = map[string]struct{}{
+	// English
+	"the": {}, "and": {}, "for": {}, "are": {}, "you": {}, "with": {},
+	"this": {}, "that": {}, "have": {}, "was": {}, "from": {}, "but": {},
+	"not": {}, "they": {}, "his": {}, "her": {}, "she": {}, "him": {},
+	"all": {}, "any": {}, "can": {}, "had": {}, "has": {}, "how": {},
+	"its": {}, "let": {}, "may": {}, "out": {}, "our": {}, "put": {},
+	"too": {}, "use": {}, "way": {}, "who": {}, "why": {}, "did": {},
+	"got": {}, "now": {}, "one": {}, "two": {}, "off": {}, "yes": {},
+	"day": {}, "new": {}, "old": {}, "see": {}, "set": {}, "try": {},
+	"about": {}, "into": {}, "more": {}, "some": {}, "what": {}, "when": {},
+	"will": {}, "your": {}, "just": {}, "like": {}, "than": {}, "then": {},
+	"them": {}, "very": {}, "make": {}, "work": {}, "back": {}, "much": {},
+	"need": {}, "want": {}, "also": {}, "been": {}, "down": {}, "even": {},
+	"good": {}, "here": {}, "know": {}, "look": {}, "made": {}, "many": {},
+	"most": {}, "over": {}, "such": {}, "time": {}, "well": {}, "were": {},
+	"would": {}, "could": {}, "should": {}, "doing": {}, "today": {},
+	// Indonesian
+	"yang": {}, "dan": {}, "di": {}, "ke": {}, "dari": {}, "untuk": {},
+	"saya": {}, "kamu": {}, "ini": {}, "itu": {}, "dengan": {}, "tidak": {},
+	"juga": {}, "atau": {}, "tapi": {}, "ada": {}, "akan": {}, "sudah": {},
+	"sama": {}, "buat": {}, "pada": {}, "lagi": {}, "bisa": {}, "kalau": {},
+	"belum": {}, "karena": {}, "biar": {}, "lebih": {}, "harus": {}, "masih": {},
+}
+
+func addWords(freq map[string]int, text string) {
+	for _, raw := range strings.FieldsFunc(text, func(r rune) bool {
+		return !isWordChar(r)
+	}) {
+		w := strings.ToLower(raw)
+		if len(w) < 4 || len(w) > 24 {
+			continue
+		}
+		if _, ok := stopwords[w]; ok {
+			continue
+		}
+		freq[w]++
+	}
+}
+
+func isWordChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_'
+}
+
+func topTopics(freq map[string]int, n int) []domain.TopicCount {
+	out := make([]domain.TopicCount, 0, len(freq))
+	for w, c := range freq {
+		if c < 2 {
+			continue
+		}
+		out = append(out, domain.TopicCount{Word: w, Count: c})
+	}
+	// Selection sort up to n — cheaper than full sort for tiny n.
+	for i := 0; i < n && i < len(out); i++ {
+		best := i
+		for j := i + 1; j < len(out); j++ {
+			if out[j].Count > out[best].Count {
+				best = j
+			}
+		}
+		out[i], out[best] = out[best], out[i]
+	}
+	if len(out) > n {
+		out = out[:n]
+	}
+	return out
+}
+
+// StudentGrades returns one GradeRoom per classroom the user is enrolled
+// in as a mentee, each containing every assignment in that room with
+// the student's submission state. Used by /me/grades.
+//
+// Status is derived per assignment:
+//   - "missing"  — no submission and the deadline has passed
+//   - "—"        — no submission, deadline not yet passed
+//   - "late"     — submitted after the deadline, awaiting review
+//   - "submitted"/ "revise" — submission status as-is
+//   - "reviewed" — submission has been reviewed
+func (s *Store) StudentGrades(userID string) ([]domain.GradeRoom, error) {
+	rows, err := s.db.Query(`SELECT rm.id, rm.name, a.id, a.title, a.due_date,
+			COALESCE(sub.status, ''), COALESCE(sub.score, ''),
+			COALESCE(sub.feedback, ''), COALESCE(sub.submitted_at, '')
+		FROM memberships m
+		JOIN rooms rm ON rm.id = m.room_id AND rm.mode = 'classroom'
+		JOIN assignments a ON a.room_id = rm.id AND a.deleted_at = ''
+		LEFT JOIN submissions sub ON sub.assignment_id = a.id AND sub.student_id = ?
+		WHERE m.user_id = ? AND m.role = 'mentee'
+		ORDER BY rm.name, a.due_date DESC, a.created_at DESC`, userID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byRoom := map[string]*domain.GradeRoom{}
+	var order []string
+	today := time.Now().UTC().Format("2006-01-02")
+	for rows.Next() {
+		var roomID, roomName, asgnID, title, due, status, score, feedback, submittedAt string
+		if err := rows.Scan(&roomID, &roomName, &asgnID, &title, &due, &status, &score, &feedback, &submittedAt); err != nil {
+			return nil, err
+		}
+		gr, ok := byRoom[roomID]
+		if !ok {
+			gr = &domain.GradeRoom{RoomID: roomID, RoomName: roomName}
+			byRoom[roomID] = gr
+			order = append(order, roomID)
+		}
+		row := domain.GradeRow{
+			AssignmentID:    asgnID,
+			AssignmentTitle: title,
+			DueDate:         due,
+			Score:           score,
+			Feedback:        feedback,
+			SubmittedAt:     submittedAt,
+			Status:          gradeStatus(status, submittedAt, due, today),
+		}
+		gr.Rows = append(gr.Rows, row)
+		gr.TotalCount++
+		if score != "" {
+			if v, err := strconv.Atoi(score); err == nil {
+				gr.AverageScore += float64(v)
+				gr.ScoredCount++
+			}
+		}
+		if row.Status == "reviewed" || row.Status == "submitted" || row.Status == "revise" {
+			// On-time if submitted_at date <= due_date.
+			if submittedAt != "" && due != "" && submittedAt[:10] <= due {
+				gr.OnTimePct++ // running count, normalized below
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]domain.GradeRoom, 0, len(order))
+	for _, rid := range order {
+		gr := byRoom[rid]
+		if gr.ScoredCount > 0 {
+			gr.AverageScore /= float64(gr.ScoredCount)
+		}
+		if gr.TotalCount > 0 {
+			gr.OnTimePct = (gr.OnTimePct / float64(gr.TotalCount)) * 100
+		}
+		out = append(out, *gr)
+	}
+	return out, nil
+}
+
+func gradeStatus(submissionStatus, submittedAt, due, today string) string {
+	if submissionStatus == "" {
+		if due != "" && due < today {
+			return "missing"
+		}
+		return "—"
+	}
+	if submissionStatus == "reviewed" {
+		return "reviewed"
+	}
+	// Submitted but not reviewed. Flag "late" iff it landed after the deadline.
+	if due != "" && submittedAt != "" && submittedAt[:10] > due {
+		return "late"
+	}
+	return submissionStatus
 }
 
 func dueState(dueDate, status string, now time.Time) string {

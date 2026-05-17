@@ -174,3 +174,83 @@ form.inline input[type="text"],form.inline input:not([type]){width:auto}
 .comment-edit summary{cursor:pointer;color:var(--accent);font-size:13px;font-weight:700}
 .comment-edit textarea{margin-top:6px;width:100%}
 .form-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+
+/* Topbar search box. Sits next to the user chip; collapses below the
+   nav line at narrow widths. */
+.topbar-search{display:inline-flex;align-items:center;margin:0}
+.topbar-search input[type=search]{height:30px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:#fff;font:inherit;min-width:0;width:170px}
+.topbar-search input[type=search]:focus{outline:3px solid rgba(23,107,82,.16);border-color:var(--accent)}
+@media (max-width:860px){
+  .topbar-search input[type=search]{width:120px}
+}
+
+/* Onboarding card grid — paths sit side-by-side on wide screens. */
+.onboarding-paths{display:grid;gap:16px;margin:16px 0;grid-template-columns:1fr}
+@media (min-width:720px){
+  .onboarding-paths{grid-template-columns:1fr 1fr}
+}
+.onboarding-card{background:#fafcfa}
+.onboarding-skip{margin-top:18px}
+
+/* Search results list. <mark> tags inside the snippet are styled here
+   so the highlight stays inside the same visual language as the rest
+   of the page. */
+.search-form{display:flex;gap:8px;align-items:stretch;margin:12px 0 18px}
+.search-form input[type=search]{flex:1 1 auto;min-width:0}
+.search-list{list-style:none;padding:0;margin:0;display:grid;gap:10px}
+.search-hit{border:1px solid var(--line);border-radius:12px;background:#fafcfa;padding:14px}
+.search-hit a{color:inherit;text-decoration:none;display:grid;gap:6px}
+.search-hit a:hover{background:rgba(23,107,82,.04);border-radius:12px}
+.search-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px}
+.search-snippet{margin:0;color:var(--muted);font-size:14px}
+.search-snippet mark{background:rgba(255,224,102,.6);color:inherit;padding:0 2px;border-radius:3px}
+
+/* /me/coaching and /me/growth share metric cards. */
+.window-picker{display:flex;gap:10px;margin:10px 0 18px;flex-wrap:wrap}
+.window-picker a{padding:4px 12px;border-radius:999px;border:1px solid var(--line);color:var(--muted);text-decoration:none;font-size:13px}
+.window-picker a.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.metric-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin:16px 0}
+.metric-card{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fafcfa;display:grid;gap:4px}
+.metric-card span{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.02em;font-weight:700}
+.metric-card strong{font-size:28px;font-weight:800}
+.metric-card.good{background:rgba(23,107,82,.08)}
+.metric-card.warn{background:rgba(245,158,11,.12)}
+.metric-card .muted{font-size:12px;margin:0}
+
+/* Sparkline for the growth dashboard. Heights are pre-bucketed (h-0
+   through h-10) so we never need inline styles — CSP-friendly. */
+.sparkline{list-style:none;padding:0;margin:12px 0 4px;display:flex;align-items:flex-end;gap:6px;height:96px}
+.sparkline li{flex:1 1 0;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0}
+.sparkline .bar{width:14px;background:var(--accent);border-radius:3px;display:block}
+.sparkline .bar.h-0{height:4px;background:#e2e8e6}
+.sparkline .bar.h-1{height:10%}
+.sparkline .bar.h-2{height:20%}
+.sparkline .bar.h-3{height:30%}
+.sparkline .bar.h-4{height:40%}
+.sparkline .bar.h-5{height:50%}
+.sparkline .bar.h-6{height:60%}
+.sparkline .bar.h-7{height:70%}
+.sparkline .bar.h-8{height:80%}
+.sparkline .bar.h-9{height:90%}
+.sparkline .bar.h-10{height:100%}
+.sparkline .bar-label{font-size:10px;color:var(--muted)}
+
+.topic-list{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:6px}
+.topic-list li{display:inline-flex;align-items:center;gap:4px;font-size:13px}
+
+/* /me/grades — one table per classroom. Mirrors the .member-list grid
+   pattern in the rest of the app. */
+.grade-room{margin:14px 0}
+.grade-table{display:grid;gap:0;margin-top:8px}
+.grade-table .table-head,.grade-table .grade-row{display:grid;grid-template-columns:minmax(160px,2fr) 110px 100px 70px minmax(180px,2fr);gap:10px;padding:8px 10px;align-items:center;border-bottom:1px solid var(--line)}
+.grade-table .table-head{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.grade-table .grade-row .status{padding:2px 8px;border-radius:6px;font-size:12px;font-weight:700}
+.grade-table .grade-row .status.missing{background:rgba(180,30,30,.12);color:#b3261e}
+.grade-table .grade-row .status.late{background:rgba(245,158,11,.18);color:#92400e}
+.grade-table .grade-row .status.reviewed{background:rgba(23,107,82,.14);color:var(--accent-strong)}
+.grade-table .grade-row .status.submitted{background:rgba(23,107,82,.08);color:var(--accent-strong)}
+.grade-table .grade-row .status.revise{background:rgba(245,158,11,.18);color:#92400e}
+@media (max-width:720px){
+  .grade-table .table-head{display:none}
+  .grade-table .grade-row{grid-template-columns:1fr;border-bottom:1px solid var(--line);padding:10px 6px}
+}

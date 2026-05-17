@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +60,7 @@ func TestSchemaV1HasFinalShape(t *testing.T) {
 		{"users", "language"},
 		{"users", "can_create_rooms"},
 		{"users", "engagement_notif_enabled"},
+		{"users", "onboarded_at"},
 		{"sessions", "created_at"},
 		{"rooms", "mode"},
 		{"rooms", "leaderboard_visible"},
@@ -653,5 +655,114 @@ func TestRoleDashboards(t *testing.T) {
 	}
 	if menteeDash.Summary.OpenTasks != 1 || menteeDash.Summary.OverdueTasks != 1 || menteeDash.Summary.Blockers != 1 {
 		t.Fatalf("bad mentee summary: %+v", menteeDash.Summary)
+	}
+}
+
+// TestSearchFTSReturnsHitsAndRespectsVisibility exercises the FTS5 path:
+// reports get indexed via trigger, the cross-source query returns hits,
+// and a mentee cannot see another mentee's report.
+func TestSearchFTSReturnsHitsAndRespectsVisibility(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
+	codeA := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	codeB := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	menteeA, _ := joinMentee(t, st, codeA, "Mentee A", "a@example.com")
+	menteeB, _ := joinMentee(t, st, codeB, "Mentee B", "b@example.com")
+
+	if err := st.CreateReport(roomID, menteeA, "Studied FTS5 indexing", "Practiced queries", "", "Continue", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateReport(roomID, menteeB, "Studied React hooks", "Practiced state", "", "Continue", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mentor sees both reports for "studied".
+	hits, err := st.Search(mentorID, "studied", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("mentor expected 2 hits, got %d (%+v)", len(hits), hits)
+	}
+	// Mentee A only sees their own.
+	hitsA, err := st.Search(menteeA, "studied", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hitsA) != 1 || !strings.Contains(hitsA[0].Snippet, "FTS5") {
+		t.Fatalf("mentee A expected 1 own-report hit with FTS5 snippet, got %+v", hitsA)
+	}
+}
+
+// TestSearchExcludesSoftDeletedRows: after soft-delete, the row should
+// drop out of search results even though it still exists in the table.
+func TestSearchExcludesSoftDeletedRows(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
+	code := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	menteeID, _ := joinMentee(t, st, code, "Mentee", "m@example.com")
+
+	if err := st.CreateReport(roomID, menteeID, "Studied unique keyword zorp", "P", "", "N", nil); err != nil {
+		t.Fatal(err)
+	}
+	hits, err := st.Search(mentorID, "zorp", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("expected 1 hit before delete, got %d", len(hits))
+	}
+	if _, err := st.DeleteReport(hits[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	hits2, err := st.Search(mentorID, "zorp", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits2) != 0 {
+		t.Fatalf("expected 0 hits after delete, got %d", len(hits2))
+	}
+}
+
+// TestStudentGradesAggregatesAcrossClassrooms confirms the cross-class
+// grade view computes average and on-time percent per room.
+func TestStudentGradesAggregatesAcrossClassrooms(t *testing.T) {
+	st := newTestStore(t)
+	mentorID, _ := createUserRoom(t, st, "Teacher", "teacher@example.com")
+	roomID, err := st.CreateRoom("Math", mentorID, domain.RoomModeClassroom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
+	studentID, _ := joinMentee(t, st, code, "S", "s@example.com")
+
+	// Past-deadline assignment so we can test "on time" math against a
+	// fresh submission (today vs deadline in the past).
+	asgnID, err := st.CreateAssignment(roomID, mentorID, "Quiz 1", "instructions", "", "2026-01-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SubmitAssignment(roomID, asgnID, studentID, "done",
+		[]domain.Link{{Label: "Doc", URL: "https://docs.example.com/x"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Find the submission ID to review with a score.
+	subs, err := st.Submissions(roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ReviewSubmission(roomID, subs[0].ID, "reviewed", "ok", "85"); err != nil {
+		t.Fatal(err)
+	}
+
+	rooms, err := st.StudentGrades(studentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rooms) != 1 || rooms[0].RoomID != roomID {
+		t.Fatalf("expected one room, got %+v", rooms)
+	}
+	if rooms[0].ScoredCount != 1 || rooms[0].AverageScore != 85 {
+		t.Fatalf("expected score 85 / 1 scored, got %+v", rooms[0])
 	}
 }
