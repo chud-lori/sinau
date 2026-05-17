@@ -258,6 +258,23 @@ func safeReturnPath(p string) string {
 	return p
 }
 
+// normalizeSubmissionScore validates and canonicalises the score input on
+// classroom submission reviews. An empty value (the teacher chose not to
+// score) is allowed. Otherwise it must be an integer in [0, 100]; the
+// returned string is the trimmed integer form, so storage stays
+// consistent regardless of leading zeros or whitespace.
+func normalizeSubmissionScore(raw string) (string, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", true
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 || n > 100 {
+		return "", false
+	}
+	return strconv.Itoa(n), true
+}
+
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return s.withUser(func(w http.ResponseWriter, r *http.Request) {
 		if current(r) == nil {
@@ -863,7 +880,11 @@ func (s *Server) reviewSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	feedback := auth.Clean(r.FormValue("feedback"), 2000)
-	score := auth.Clean(r.FormValue("score"), 80)
+	score, ok := normalizeSubmissionScore(r.FormValue("score"))
+	if !ok {
+		http.Error(w, "score must be empty or an integer 0-100", http.StatusBadRequest)
+		return
+	}
 	if status == "revise" && feedback == "" {
 		http.Error(w, "revision feedback is required", http.StatusBadRequest)
 		return

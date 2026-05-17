@@ -397,5 +397,13 @@ func init() {
 		"notif.task_due.footer":   "Buka Sinau untuk menandainya selesai atau memperbarui progres.",
 		"notif.task_due.signature": "— Sinau",
 		"notif.task_due.short":   "Pengingat Sinau: tugas %q di %q jatuh tempo %s.",
+
+		// Notification content — classroom assignment due
+		"notif.assignment_due.subject":      "Sinau: tugas kelas %q jatuh tempo %s",
+		"notif.assignment_due.greeting":     "Hai %s,",
+		"notif.assignment_due.body":         "Tugas %q di kelas %q jatuh tempo pada %s.",
+		"notif.assignment_due.instructions": "Instruksi:",
+		"notif.assignment_due.footer":       "Buka Sinau untuk mengumpulkan tugas atau memperbarui progres.",
+		"notif.assignment_due.short":        "Pengingat Sinau: tugas kelas %q di %q jatuh tempo %s.",
 	})
 }

@@ -270,6 +270,24 @@ type TaskReminder struct {
 	AssigneeLanguage string
 }
 
+// AssignmentReminder is a single (assignment, mentee) pair the worker
+// should ping about an approaching classroom deadline. The store query
+// fans an assignment out into one record per mentee who has not yet
+// submitted, so the worker dispatches each record exactly like a
+// TaskReminder.
+type AssignmentReminder struct {
+	AssignmentID    string
+	Title           string
+	Instructions    string
+	DueDate         string
+	RoomID          string
+	RoomName        string
+	MenteeID        string
+	MenteeName      string
+	MenteeEmail     string
+	MenteeLanguage  string
+}
+
 type RoomData struct {
 	Members     []Member
 	Reports     []Report

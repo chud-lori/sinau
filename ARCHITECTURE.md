@@ -106,47 +106,36 @@ Two idempotency guards in the store layer protect against accidental re-edits:
 
 ## Migrations
 
-Versioned in `schema_migrations`. Six versions today, plus one idempotent shim:
+Pre-launch history is squashed into a single migration. `schemaV1` in
+`internal/store/store.go` is the entire shape of the database — every
+table created in final form, no incremental ALTERs. The runner is one
+generic `applyMigration(version, []string)` wrapped in a transaction.
 
-| Version | What it adds |
-|---------|--------------|
-| 1 | Initial schema: users, sessions, rooms, memberships, invites, reports, comments, tasks. |
-| 2 | `tasks.due_date`, `tasks.last_reminded_at`. |
-| 3 | `notification_prefs`, `rooms.leaderboard_visible`, `tasks.points_awarded/reviewed_at/reviewed_by`, `points_ledger`. |
-| 4 | Rebuilds `notification_prefs` to drop the hard-coded channel CHECK and add `whatsapp_number` / `telegram_chat_id`. Toggles `PRAGMA foreign_keys` around the rebuild. |
-| 5 | `rooms.mode`, `assignments`, `submissions`. |
-| 6 | `users.can_create_rooms`, backfilled from existing memberships. |
-
-Plus `ensureGamificationSchema()` between v3 and v4 — an idempotent shim that patches DBs upgraded from a divergent pre-rebase v3.
-
-Three runner styles coexist:
-
-- `applyMigration(version, []string)` — generic, fresh-install path, all statements in one tx.
-- `applyMigration4` — custom because `PRAGMA foreign_keys` can't be toggled inside a tx.
-- `applyMigration5` / `applyMigration6` — custom because they check column existence inside the tx (idempotent against the divergent upgrade path).
-
-This works but is **flagged tech debt**: editing migration 1 in place to add `can_create_rooms` made the history non-truthful. A future cleanup should fold `ensureGamificationSchema` into a numbered migration and consolidate the three runners under one `applyMigrationFunc(int, func(*sql.Tx) error)` shape.
+If you need to evolve the schema after release, add `migration 2`
+alongside `schemaV1`. Do not edit `schemaV1` itself — that path is
+closed.
 
 ## Notifications
 
 ```
-                                ┌─ off (skip)
-                                │
-  worker tick → due tasks → ────┼─ log (default fallback)
-                                │
-                                ├─ email (SMTP via net/smtp)
-                                │
-                                ├─ whatsapp (stub: HTTP gateway)
-                                │
-                                └─ telegram (stub: Bot API)
+                                              ┌─ off (skip)
+                                              │
+  worker tick → due tasks       ─┐            ├─ log (default fallback)
+                                 ├─→ dispatch ┤
+                worker tick → due assignments ┘├─ email (SMTP via net/smtp)
+                                              │
+                                              ├─ whatsapp (stub: HTTP gateway)
+                                              │
+                                              └─ telegram (stub: Bot API)
 ```
 
 - Users opt in at `/settings`. Default state for everyone is `off`.
-- `Notifier` interface: `NotifyTaskDue(ctx, Recipient, TaskReminder) error`.
+- `Notifier` interface has two methods: `NotifyTaskDue(ctx, Recipient, TaskReminder)` for mentorship rooms and `NotifyAssignmentDue(ctx, Recipient, AssignmentReminder)` for classroom rooms. Adding a new channel means implementing both, plus a constant in `internal/domain`.
 - `Worker` holds a `map[channel]Notifier`. At dispatch time it reads each user's `notification_prefs` and routes to the right notifier. Unknown channels are logged and skipped.
 - `EmailNotifier` is real (SMTP, STARTTLS, falls back to log when `SINAU_SMTP_HOST/FROM` is unset).
-- `WhatsAppNotifier` and `TelegramNotifier` are **interface-ready stubs**: full config struct, `Configured()` check, fallback wiring, and TODO blocks pointing at the integration paths (`go-whatsapp-web-multidevice` REST daemon and Telegram Bot API). To finish wiring a channel, fill in the `NotifyTaskDue` body — no changes to migrations, store, worker, or web layer needed.
-- Dedup: `tasks.last_reminded_at` set after dispatch — one notification per task per day across all recipients.
+- `WhatsAppNotifier` and `TelegramNotifier` are **interface-ready stubs**: full config struct, `Configured()` check, fallback wiring, and TODO blocks pointing at the integration paths (`go-whatsapp-web-multidevice` REST daemon and Telegram Bot API). To finish wiring a channel, fill in the two `Notify*Due` bodies — no changes to migrations, store, worker, or web layer needed.
+- Dedup: `tasks.last_reminded_at` and `assignments.last_reminded_at` set after dispatch — one notification per task or assignment per day across all recipients.
+- Notification content is localised per recipient: subject/body resolves through `i18n.T` using `users.language`.
 - Master switch: `SINAU_NOTIFICATIONS_ENABLED=false` hides the `/settings` UI, the topbar link, the `/help` section, and skips starting the worker.
 
 ## Reminder worker
@@ -158,12 +147,12 @@ ticker := time.NewTicker(every)             // SINAU_REMINDER_INTERVAL, default 
 for {
     select {
     case <-ctx.Done():       return
-    case <-ticker.C:         runOnce(ctx)   // scan tasks within SINAU_REMINDER_WINDOW
+    case <-ticker.C:         runOnce(ctx)   // scan both task + assignment due windows
     }
 }
 ```
 
-`runOnce` queries due tasks (`DueTaskReminders`), dispatches each through the channel registry, and stamps `last_reminded_at`. Failure to mark dedup is logged but doesn't block the next iteration.
+`runOnce` makes two passes: (1) `DueTaskReminders` then per-task dispatch + `MarkTaskReminded`; (2) `DueAssignmentReminders` (fans each assignment out to all unsubmitted mentees) then `MarkAssignmentReminded` per unique assignment. Failure to mark dedup is logged but doesn't block the next iteration.
 
 ## Frontend
 
@@ -204,8 +193,6 @@ Test coverage focuses on the store (which encodes authorization rules) and on we
 
 ## Known tech debt (carried, not blocking)
 
-- Migration 1 was edited in-place to add `can_create_rooms`; migration 6 patches old DBs. Works, but the file no longer reads as a faithful history. Future cleanup: fold `ensureGamificationSchema` into a numbered migration and consolidate runners.
-- Submission `score` is a `TEXT` field with no constraint. Inconsistent with the 1–5 task rubric. Worth unifying.
-- `Assignment.MySubmissionStatus/URL/Feedback/Score` are viewer-specific fields on what should be a clean domain type.
-- No pagination on `Reports` (`LIMIT 80`), `Submissions`, `Members`, `Assignments`. Acceptable for small rooms.
-- Classroom-event notifications (assignment due, submission received) are not wired into the reminder system yet — only task due reminders are.
+- `Assignment.MySubmissionStatus/URL/Feedback/Score` are viewer-specific fields on what should be a clean domain type. Refactor when the next feature touches submission shape; pure code-organisation, no user impact.
+- No pagination on `Reports` (`LIMIT 80`), `Submissions`, `Members`, `Assignments`. Acceptable for small rooms; revisit if one room ever exceeds ~30 mentees with months of weekly history.
+- Submission-received notifications (teacher gets pinged when a mentee submits) are not yet wired. Only deadline reminders fire today, on both sides.

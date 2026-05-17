@@ -48,363 +48,159 @@ func (s *Store) DB() *sql.DB {
 	return s.db
 }
 
+// Migrate ensures the database is on the current schema. Pre-1.0, history
+// is squashed into a single migration: any new install gets the final
+// shape in one transaction, with no incremental ALTERs. If you need to
+// evolve the schema post-launch, add a migration 2 alongside this; do not
+// edit migration 1 in place — that path is closed.
 func (s *Store) Migrate() error {
-	stmts := []string{
+	bootstrap := []string{
 		`PRAGMA foreign_keys = ON`,
 		`CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY,
 			applied_at TEXT NOT NULL
 		)`,
 	}
-	for _, stmt := range stmts {
+	for _, stmt := range bootstrap {
 		if _, err := s.db.Exec(stmt); err != nil {
 			return err
 		}
 	}
-	if err := s.applyMigration(1, []string{
-		`CREATE TABLE IF NOT EXISTS users (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-			password_hash TEXT NOT NULL,
-			can_create_rooms INTEGER NOT NULL DEFAULT 0,
-			created_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS sessions (
-			id_hash TEXT PRIMARY KEY,
-			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			csrf TEXT NOT NULL,
-			expires_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS rooms (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			created_by TEXT NOT NULL REFERENCES users(id),
-			created_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS memberships (
-			room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			role TEXT NOT NULL CHECK(role IN ('mentor','mentee')),
-			created_at TEXT NOT NULL,
-			PRIMARY KEY(room_id, user_id)
-		)`,
-		`CREATE TABLE IF NOT EXISTS invites (
-			code_hash TEXT PRIMARY KEY,
-			room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-			role TEXT NOT NULL CHECK(role IN ('mentor','mentee')),
-			created_by TEXT NOT NULL REFERENCES users(id),
-			expires_at TEXT NOT NULL,
-			used_by TEXT REFERENCES users(id),
-			used_at TEXT
-		)`,
-		`CREATE TABLE IF NOT EXISTS reports (
-			id TEXT PRIMARY KEY,
-			room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			learned TEXT NOT NULL,
-			practiced TEXT NOT NULL,
-			blocker TEXT NOT NULL,
-			next_plan TEXT NOT NULL,
-			link_url TEXT NOT NULL,
-			created_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS comments (
-			id TEXT PRIMARY KEY,
-			report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
-			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			body TEXT NOT NULL,
-			created_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS tasks (
-			id TEXT PRIMARY KEY,
-			room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-			assigned_to TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			assigned_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			title TEXT NOT NULL,
-			detail TEXT NOT NULL,
-			status TEXT NOT NULL CHECK(status IN ('todo','doing','done')),
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_reports_room_created ON reports(room_id, created_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_reports_room_user ON reports(room_id, user_id, created_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_comments_report_created ON comments(report_id, created_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_tasks_room_status ON tasks(room_id, status)`,
-		`CREATE INDEX IF NOT EXISTS idx_tasks_room_assignee ON tasks(room_id, assigned_to, status)`,
-	}); err != nil {
-		return err
-	}
-	if err := s.applyMigration(2, []string{
-		`ALTER TABLE tasks ADD COLUMN due_date TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE tasks ADD COLUMN last_reminded_at TEXT NOT NULL DEFAULT ''`,
-		`CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date, status)`,
-	}); err != nil {
-		return err
-	}
-	if err := s.applyMigration(3, []string{
-		`CREATE TABLE IF NOT EXISTS notification_prefs (
-			user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-			enabled INTEGER NOT NULL DEFAULT 0,
-			channel TEXT NOT NULL DEFAULT 'off' CHECK(channel IN ('off','email','log')),
-			updated_at TEXT NOT NULL
-		)`,
-		`ALTER TABLE rooms ADD COLUMN leaderboard_visible INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE tasks ADD COLUMN points_awarded INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE tasks ADD COLUMN reviewed_at TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE tasks ADD COLUMN reviewed_by TEXT NOT NULL DEFAULT ''`,
-		`CREATE TABLE IF NOT EXISTS points_ledger (
-			id TEXT PRIMARY KEY,
-			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-			source TEXT NOT NULL,
-			source_id TEXT NOT NULL,
-			amount INTEGER NOT NULL,
-			awarded_by TEXT NOT NULL,
-			awarded_at TEXT NOT NULL,
-			UNIQUE(source, source_id)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_points_ledger_user ON points_ledger(user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_points_ledger_room_user ON points_ledger(room_id, user_id)`,
-	}); err != nil {
-		return err
-	}
-	if err := s.ensureGamificationSchema(); err != nil {
-		return err
-	}
-	// Migration 4 rebuilds notification_prefs to (a) drop the hard-coded
-	// channel CHECK so adding new channels is a code-only change, and
-	// (b) add WhatsApp and Telegram contact fields. PRAGMA foreign_keys
-	// can't be toggled inside a transaction, so this needs its own runner.
-	if err := s.applyMigration4(); err != nil {
-		return err
-	}
-	if err := s.applyMigration5(); err != nil {
-		return err
-	}
-	if err := s.applyMigration6(); err != nil {
-		return err
-	}
-	return s.applyMigration7()
+	return s.applyMigration(1, schemaV1)
 }
 
-func (s *Store) applyMigration7() error {
-	const version = 7
-	var exists int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&exists); err != nil {
-		return err
-	}
-	if exists == 1 {
-		return nil
-	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	langExists, err := columnExistsTx(tx, "users", "language")
-	if err != nil {
-		return err
-	}
-	if !langExists {
-		if _, err := tx.Exec(`ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'en'`); err != nil {
-			return fmt.Errorf("migration %d: %w", version, err)
-		}
-	}
-	if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`, version, auth.Now()); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (s *Store) ensureGamificationSchema() error {
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS notification_prefs (
-			user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-			enabled INTEGER NOT NULL DEFAULT 0,
-			channel TEXT NOT NULL DEFAULT 'off' CHECK(channel IN ('off','email','log')),
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS points_ledger (
-			id TEXT PRIMARY KEY,
-			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-			source TEXT NOT NULL,
-			source_id TEXT NOT NULL,
-			amount INTEGER NOT NULL,
-			awarded_by TEXT NOT NULL,
-			awarded_at TEXT NOT NULL,
-			UNIQUE(source, source_id)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_points_ledger_user ON points_ledger(user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_points_ledger_room_user ON points_ledger(room_id, user_id)`,
-	}
-	for _, stmt := range stmts {
-		if _, err := s.db.Exec(stmt); err != nil {
-			return err
-		}
-	}
-	columns := []struct {
-		table string
-		name  string
-		stmt  string
-	}{
-		{"rooms", "leaderboard_visible", `ALTER TABLE rooms ADD COLUMN leaderboard_visible INTEGER NOT NULL DEFAULT 0`},
-		{"tasks", "points_awarded", `ALTER TABLE tasks ADD COLUMN points_awarded INTEGER NOT NULL DEFAULT 0`},
-		{"tasks", "reviewed_at", `ALTER TABLE tasks ADD COLUMN reviewed_at TEXT NOT NULL DEFAULT ''`},
-		{"tasks", "reviewed_by", `ALTER TABLE tasks ADD COLUMN reviewed_by TEXT NOT NULL DEFAULT ''`},
-	}
-	for _, col := range columns {
-		exists, err := s.columnExists(col.table, col.name)
-		if err != nil {
-			return err
-		}
-		if !exists {
-			if _, err := s.db.Exec(col.stmt); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (s *Store) applyMigration4() error {
-	const version = 4
-	var exists int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&exists); err != nil {
-		return err
-	}
-	if exists == 1 {
-		return nil
-	}
-	if _, err := s.db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
-		return err
-	}
-	// Restore FKs no matter how we exit.
-	defer func() { _, _ = s.db.Exec(`PRAGMA foreign_keys = ON`) }()
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	stmts := []string{
-		`CREATE TABLE notification_prefs_new (
-			user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-			enabled INTEGER NOT NULL DEFAULT 0,
-			channel TEXT NOT NULL DEFAULT 'off',
-			whatsapp_number TEXT NOT NULL DEFAULT '',
-			telegram_chat_id TEXT NOT NULL DEFAULT '',
-			updated_at TEXT NOT NULL
-		)`,
-		`INSERT INTO notification_prefs_new(user_id, enabled, channel, updated_at)
-			SELECT user_id, enabled, channel, updated_at FROM notification_prefs`,
-		`DROP TABLE notification_prefs`,
-		`ALTER TABLE notification_prefs_new RENAME TO notification_prefs`,
-	}
-	for _, stmt := range stmts {
-		if _, err := tx.Exec(stmt); err != nil {
-			return fmt.Errorf("migration %d: %w", version, err)
-		}
-	}
-	if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`, version, auth.Now()); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (s *Store) applyMigration5() error {
-	const version = 5
-	var exists int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&exists); err != nil {
-		return err
-	}
-	if exists == 1 {
-		return nil
-	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	modeExists, err := columnExistsTx(tx, "rooms", "mode")
-	if err != nil {
-		return err
-	}
-	stmts := []string{}
-	if !modeExists {
-		stmts = append(stmts, `ALTER TABLE rooms ADD COLUMN mode TEXT NOT NULL DEFAULT 'mentorship'`)
-	}
-	stmts = append(stmts,
-		`CREATE TABLE IF NOT EXISTS assignments (
-			id TEXT PRIMARY KEY,
-			room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-			created_by TEXT NOT NULL REFERENCES users(id),
-			title TEXT NOT NULL,
-			instructions TEXT NOT NULL,
-			resource_url TEXT NOT NULL,
-			due_date TEXT NOT NULL,
-			created_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS submissions (
-			id TEXT PRIMARY KEY,
-			assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
-			student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			link_url TEXT NOT NULL,
-			note TEXT NOT NULL,
-			status TEXT NOT NULL CHECK(status IN ('submitted','reviewed','revise')),
-			feedback TEXT NOT NULL,
-			score TEXT NOT NULL,
-			submitted_at TEXT NOT NULL,
-			reviewed_at TEXT NOT NULL,
-			UNIQUE(assignment_id, student_id)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_assignments_room_due ON assignments(room_id, due_date, created_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_submissions_assignment ON submissions(assignment_id, submitted_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_submissions_student ON submissions(student_id, submitted_at DESC)`,
-	)
-	for _, stmt := range stmts {
-		if _, err := tx.Exec(stmt); err != nil {
-			return fmt.Errorf("migration %d: %w", version, err)
-		}
-	}
-	if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`, version, auth.Now()); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (s *Store) applyMigration6() error {
-	const version = 6
-	var exists int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&exists); err != nil {
-		return err
-	}
-	if exists == 1 {
-		return nil
-	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	canCreateExists, err := columnExistsTx(tx, "users", "can_create_rooms")
-	if err != nil {
-		return err
-	}
-	if !canCreateExists {
-		if _, err := tx.Exec(`ALTER TABLE users ADD COLUMN can_create_rooms INTEGER NOT NULL DEFAULT 0`); err != nil {
-			return fmt.Errorf("migration %d: %w", version, err)
-		}
-	}
-	if _, err := tx.Exec(`UPDATE users SET can_create_rooms = 1
-		WHERE id IN (SELECT user_id FROM memberships WHERE role = 'mentor')
-		   OR id IN (SELECT id FROM users ORDER BY created_at, id LIMIT 1)`); err != nil {
-		return fmt.Errorf("migration %d: %w", version, err)
-	}
-	if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`, version, auth.Now()); err != nil {
-		return err
-	}
-	return tx.Commit()
+// schemaV1 is the consolidated initial schema. Every table lands here in
+// its final shape — no incremental ALTERs, no in-place edits. If you need
+// schema changes after release, add migration 2 below this slice, do not
+// touch these statements.
+var schemaV1 = []string{
+	`CREATE TABLE IF NOT EXISTS users (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+		password_hash TEXT NOT NULL,
+		can_create_rooms INTEGER NOT NULL DEFAULT 0,
+		language TEXT NOT NULL DEFAULT 'en',
+		created_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS sessions (
+		id_hash TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		csrf TEXT NOT NULL,
+		expires_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS rooms (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		mode TEXT NOT NULL DEFAULT 'mentorship' CHECK(mode IN ('mentorship','classroom')),
+		leaderboard_visible INTEGER NOT NULL DEFAULT 0,
+		created_by TEXT NOT NULL REFERENCES users(id),
+		created_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS memberships (
+		room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		role TEXT NOT NULL CHECK(role IN ('mentor','mentee')),
+		created_at TEXT NOT NULL,
+		PRIMARY KEY(room_id, user_id)
+	)`,
+	`CREATE TABLE IF NOT EXISTS invites (
+		code_hash TEXT PRIMARY KEY,
+		room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+		role TEXT NOT NULL CHECK(role IN ('mentor','mentee')),
+		created_by TEXT NOT NULL REFERENCES users(id),
+		expires_at TEXT NOT NULL,
+		used_by TEXT REFERENCES users(id),
+		used_at TEXT
+	)`,
+	`CREATE TABLE IF NOT EXISTS reports (
+		id TEXT PRIMARY KEY,
+		room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		learned TEXT NOT NULL,
+		practiced TEXT NOT NULL,
+		blocker TEXT NOT NULL,
+		next_plan TEXT NOT NULL,
+		link_url TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS comments (
+		id TEXT PRIMARY KEY,
+		report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		body TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS tasks (
+		id TEXT PRIMARY KEY,
+		room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+		assigned_to TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		assigned_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		title TEXT NOT NULL,
+		detail TEXT NOT NULL,
+		status TEXT NOT NULL CHECK(status IN ('todo','doing','done')),
+		due_date TEXT NOT NULL DEFAULT '',
+		last_reminded_at TEXT NOT NULL DEFAULT '',
+		points_awarded INTEGER NOT NULL DEFAULT 0,
+		reviewed_at TEXT NOT NULL DEFAULT '',
+		reviewed_by TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS assignments (
+		id TEXT PRIMARY KEY,
+		room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+		created_by TEXT NOT NULL REFERENCES users(id),
+		title TEXT NOT NULL,
+		instructions TEXT NOT NULL,
+		resource_url TEXT NOT NULL,
+		due_date TEXT NOT NULL,
+		last_reminded_at TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS submissions (
+		id TEXT PRIMARY KEY,
+		assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+		student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		link_url TEXT NOT NULL,
+		note TEXT NOT NULL,
+		status TEXT NOT NULL CHECK(status IN ('submitted','reviewed','revise')),
+		feedback TEXT NOT NULL,
+		score TEXT NOT NULL DEFAULT '',
+		submitted_at TEXT NOT NULL,
+		reviewed_at TEXT NOT NULL,
+		UNIQUE(assignment_id, student_id)
+	)`,
+	`CREATE TABLE IF NOT EXISTS notification_prefs (
+		user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+		enabled INTEGER NOT NULL DEFAULT 0,
+		channel TEXT NOT NULL DEFAULT 'off',
+		whatsapp_number TEXT NOT NULL DEFAULT '',
+		telegram_chat_id TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS points_ledger (
+		id TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+		source TEXT NOT NULL,
+		source_id TEXT NOT NULL,
+		amount INTEGER NOT NULL,
+		awarded_by TEXT NOT NULL,
+		awarded_at TEXT NOT NULL,
+		UNIQUE(source, source_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_reports_room_created ON reports(room_id, created_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_reports_room_user ON reports(room_id, user_id, created_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_comments_report_created ON comments(report_id, created_at)`,
+	`CREATE INDEX IF NOT EXISTS idx_tasks_room_status ON tasks(room_id, status)`,
+	`CREATE INDEX IF NOT EXISTS idx_tasks_room_assignee ON tasks(room_id, assigned_to, status)`,
+	`CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date, status)`,
+	`CREATE INDEX IF NOT EXISTS idx_assignments_room_due ON assignments(room_id, due_date, created_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_submissions_assignment ON submissions(assignment_id, submitted_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_submissions_student ON submissions(student_id, submitted_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_points_ledger_user ON points_ledger(user_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_points_ledger_room_user ON points_ledger(room_id, user_id)`,
 }
 
 func (s *Store) applyMigration(version int, stmts []string) error {
@@ -431,20 +227,11 @@ func (s *Store) applyMigration(version int, stmts []string) error {
 	return tx.Commit()
 }
 
+// columnExists is a small introspection helper. With migrations
+// consolidated it's no longer used by Migrate; it's retained for tests
+// and as a primitive for any future schema evolution.
 func (s *Store) columnExists(table, column string) (bool, error) {
-	return columnExistsQuery(s.db, table, column)
-}
-
-func columnExistsTx(tx *sql.Tx, table, column string) (bool, error) {
-	return columnExistsQuery(tx, table, column)
-}
-
-type pragmaQuerier interface {
-	Query(query string, args ...any) (*sql.Rows, error)
-}
-
-func columnExistsQuery(q pragmaQuerier, table, column string) (bool, error) {
-	rows, err := q.Query(`PRAGMA table_info(` + table + `)`)
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
 		return false, err
 	}
@@ -1487,6 +1274,51 @@ func (s *Store) DueTaskReminders(now time.Time, window time.Duration) ([]domain.
 
 func (s *Store) MarkTaskReminded(taskID string, at time.Time) error {
 	_, err := s.db.Exec(`UPDATE tasks SET last_reminded_at = ? WHERE id = ?`, at.UTC().Format(time.RFC3339), taskID)
+	return err
+}
+
+// DueAssignmentReminders returns one record per (assignment, mentee) pair
+// where the assignment is due within the reminder window, hasn't been
+// reminded today, and the mentee hasn't submitted yet. The worker fans
+// each record out through the notifier registry exactly like a task
+// reminder, then calls MarkAssignmentReminded once per unique
+// AssignmentID to dedup until the next day.
+//
+// The dedup grain is per-assignment-per-day (one round fans out to all
+// unsubmitted mentees at once), not per-(assignment, mentee). That
+// matches the once-per-task-per-day shape used for mentorship tasks and
+// keeps the schema lean — no separate join table for reminder state.
+func (s *Store) DueAssignmentReminders(now time.Time, window time.Duration) ([]domain.AssignmentReminder, error) {
+	start := now.UTC().Format("2006-01-02")
+	end := now.UTC().Add(window).Format("2006-01-02")
+	rows, err := s.db.Query(`SELECT a.id, a.title, a.instructions, a.due_date, r.id, r.name, u.id, u.name, u.email, u.language
+		FROM assignments a
+		JOIN rooms r ON r.id = a.room_id
+		JOIN memberships m ON m.room_id = a.room_id AND m.role = ?
+		JOIN users u ON u.id = m.user_id
+		LEFT JOIN submissions sub ON sub.assignment_id = a.id AND sub.student_id = u.id
+		WHERE sub.id IS NULL
+		  AND a.due_date != ''
+		  AND a.due_date <= ?
+		  AND (a.last_reminded_at = '' OR a.last_reminded_at < ?)
+		ORDER BY a.due_date ASC, a.id ASC, u.name ASC`, domain.RoleMentee, end, start)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.AssignmentReminder
+	for rows.Next() {
+		var rem domain.AssignmentReminder
+		if err := rows.Scan(&rem.AssignmentID, &rem.Title, &rem.Instructions, &rem.DueDate, &rem.RoomID, &rem.RoomName, &rem.MenteeID, &rem.MenteeName, &rem.MenteeEmail, &rem.MenteeLanguage); err != nil {
+			return nil, err
+		}
+		out = append(out, rem)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) MarkAssignmentReminded(assignmentID string, at time.Time) error {
+	_, err := s.db.Exec(`UPDATE assignments SET last_reminded_at = ? WHERE id = ?`, at.UTC().Format(time.RFC3339), assignmentID)
 	return err
 }
 

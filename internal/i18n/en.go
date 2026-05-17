@@ -411,5 +411,13 @@ func init() {
 		"notif.task_due.footer":   "Open Sinau to mark it done or update progress.",
 		"notif.task_due.signature": "— Sinau",
 		"notif.task_due.short":   "Sinau reminder: task %q in %q is due %s.",
+
+		// Notification content — classroom assignment due
+		"notif.assignment_due.subject":      "Sinau: assignment %q due %s",
+		"notif.assignment_due.greeting":     "Hi %s,",
+		"notif.assignment_due.body":         "Your assignment %q in class %q is due on %s.",
+		"notif.assignment_due.instructions": "Instructions:",
+		"notif.assignment_due.footer":       "Open Sinau to submit your work or update your progress.",
+		"notif.assignment_due.short":        "Sinau reminder: assignment %q in %q is due %s.",
 	})
 }
