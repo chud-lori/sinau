@@ -113,6 +113,16 @@ func (p PageData) ModeLabel(mode string) string { return i18n.ModeLabel(p.Lang, 
 // used by the picker so each option shows in its own language.
 func (p PageData) LangLabel(l i18n.Lang) string { return i18n.Label(l) }
 
+// Initials renders the 1-2 letter monogram for the avatar chip.
+// Templates call it as {{$.Initials .Name}} (or {{.Initials .User.Name}}
+// at the top level). Centralised here so every list site reaches for
+// the same helper instead of inlining {{printf "%.1s" .Name}}.
+func (p PageData) Initials(name string) string { return domain.Initials(name) }
+
+// AvatarBucket maps a user ID to a stable 0..N-1 color slot used by the
+// `avatar-c{n}` CSS classes. Same ID → same chip colour across pages.
+func (p PageData) AvatarBucket(id string) int { return domain.AvatarBucket(id) }
+
 func New(cfg Config) (*Server, error) {
 	tpl, err := template.ParseGlob(cfg.Templates + "/*.html")
 	if err != nil {
