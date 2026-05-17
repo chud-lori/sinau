@@ -124,6 +124,11 @@ ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths=/var/lib/sinau
 
+# Resource limits — generous for a small instance, tighten if co-tenanting.
+MemoryHigh=192M
+MemoryMax=256M
+TasksMax=128
+
 [Install]
 WantedBy=multi-user.target
 ```
@@ -267,15 +272,12 @@ curl -I https://sinau.example.com
 
 ## Deadline Reminders
 
-Sinau includes a lightweight in-process reminder worker. It checks open tasks with deadlines inside the reminder window and logs one reminder per task per day.
+Sinau includes a lightweight in-process reminder worker. It scans open
+tasks with deadlines inside the reminder window and dispatches one
+reminder per task per day to each opted-in recipient.
 
-Current delivery:
-
-```txt
-delivery=log
-```
-
-This is intentional. Email, WhatsApp, Telegram, or Discord can be added behind the notifier interface without changing task storage or deadline logic.
+Recipients with no row in `notification_prefs` default to `off`, so nobody
+is pinged without opting in at `/settings`.
 
 Controls:
 
