@@ -33,21 +33,31 @@
   </a>
   <nav>
     {{if .User}}
+      <a class="nav-link {{if eq .RequestPath "/"}}active{{end}}" href="/">{{.T "nav.dashboard"}}</a>
       <form method="get" action="/search" class="topbar-search" role="search">
         <input name="q" type="search" maxlength="200" value="{{.SearchQuery}}" placeholder="{{.T "nav.search"}}" aria-label="{{.T "nav.search"}}">
       </form>
-      <a class="user-chip" href="/profile" aria-label="{{.T "nav.profile"}}">
-        <span class="avatar sm avatar-c{{.AvatarBucket .User.ID}}" aria-hidden="true">{{.Initials .User.Name}}</span>
-        <span>{{.User.Name}}</span>
-      </a>
       {{if gt .UserPoints 0}}<span class="pill point-chip" title="{{.T "nav.points.title"}}">{{.Tf "nav.points" .UserPoints}}</span>{{end}}
-      {{if .NotificationsEnabled}}<a href="/settings">{{.T "nav.settings"}}</a>{{end}}
-      <a href="/help">{{.T "nav.help"}}</a>
-      {{template "lang_picker" .}}
-      <form method="post" action="/logout">
-        <input type="hidden" name="csrf" value="{{.CSRF}}">
-        <button class="link" type="submit">{{.T "nav.logout"}}</button>
-      </form>
+      {{/* User menu: pure-HTML <details> dropdown — CSP-safe, no JS.
+           Holds the secondary nav (profile, settings, help, lang,
+           logout) so the topbar isn't a wall of links. */}}
+      <details class="user-menu">
+        <summary aria-label="{{.T "nav.profile"}}">
+          <span class="avatar sm avatar-c{{.AvatarBucket .User.ID}}" aria-hidden="true">{{.Initials .User.Name}}</span>
+          <span class="user-menu-name">{{.User.Name}}</span>
+          <span class="user-menu-caret" aria-hidden="true">▾</span>
+        </summary>
+        <div class="user-menu-panel" role="menu">
+          <a role="menuitem" href="/profile">{{.T "nav.profile"}}</a>
+          {{if .NotificationsEnabled}}<a role="menuitem" href="/settings">{{.T "nav.settings"}}</a>{{end}}
+          <a role="menuitem" href="/help">{{.T "nav.help"}}</a>
+          <div class="user-menu-section">{{template "lang_picker" .}}</div>
+          <form method="post" action="/logout" class="user-menu-logout">
+            <input type="hidden" name="csrf" value="{{.CSRF}}">
+            <button class="link" type="submit">{{.T "nav.logout"}}</button>
+          </form>
+        </div>
+      </details>
     {{else}}
       <a href="/help">{{.T "nav.help"}}</a>
       <a href="/login">{{.T "nav.login"}}</a>
@@ -158,6 +168,7 @@
   </div>
   {{if .SetupNeeded}}<p>{{.T "login.no_mentor"}} <a href="/setup">{{.T "login.create_link"}}</a>.</p>{{end}}
   <form method="post" action="/login" class="stack">
+    {{if .ReturnTo}}<input type="hidden" name="return_to" value="{{.ReturnTo}}">{{end}}
     <label>{{.T "form.email"}} <input name="email" type="email" required autocomplete="email"></label>
     <label>{{.T "form.password"}} <input name="password" type="password" required autocomplete="current-password"></label>
     <button type="submit">{{.T "login.submit"}}</button>
@@ -185,6 +196,36 @@
     <label>{{.T "form.email"}} <input name="email" type="email" required autocomplete="email"></label>
     <label>{{.T "form.password"}} <input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
     <button type="submit">{{.T "join.submit"}}</button>
+  </form>
+  {{if .InvitePreview.Valid}}
+  <p class="muted auth-alt">{{.T "join.already_have_account"}} <a href="/login?return_to=/join?code={{.JoinCode}}">{{.T "join.login_link"}}</a>.</p>
+  {{end}}
+</section>
+{{template "layout_end" .}}{{end}}
+
+{{/* join_confirm is the signed-in branch of /join?code=…. Renders a
+     compact "Join {Room} as {role}? [Join] [Cancel]" card so consent
+     is explicit (closes the phishing-via-img-tag auto-enrolment hole).
+     The form POSTs to /join/accept with the existing session's CSRF
+     token. */}}
+{{define "join_confirm"}}{{template "layout_start" .}}
+<section class="auth-card">
+  <div class="auth-copy">
+    <p class="eyebrow">{{.T "join.confirm.eyebrow"}}</p>
+    <h1>{{.T "join.confirm.title"}}</h1>
+    <p class="muted">{{.Tf "join.confirm.subtitle" .User.Name}}</p>
+  </div>
+  {{if .Error}}<p class="alert error">{{.Error}}</p>{{end}}
+  <div class="join-confirm-card">
+    <p>{{.T "join.preview.prefix"}}<strong>{{.RoleLabel .InvitePreview.RoomMode .InvitePreview.Role}}</strong>{{.T "join.preview.in"}}<strong>{{.InvitePreview.RoomName}}</strong>{{.Tf "join.preview.suffix" (.ModeLabel .InvitePreview.RoomMode)}}</p>
+  </div>
+  <form method="post" action="/join/accept" class="stack">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="code" value="{{.JoinCode}}">
+    <div class="form-actions">
+      <button type="submit">{{.T "join.confirm.submit"}}</button>
+      <a class="button secondary" href="/">{{.T "action.cancel"}}</a>
+    </div>
   </form>
 </section>
 {{template "layout_end" .}}{{end}}
@@ -256,7 +297,19 @@
     </div>
       <div class="mini-room-list">
       {{range .MentorDash.Rooms}}
-        <a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{$.RoleLabel .Mode .Role}} · {{$.ModeLabel .Mode}}</span></a>
+        <a class="room-card-link" href="/rooms/{{.ID}}">
+          <div class="room-card-head">
+            <strong>{{.Name}}</strong>
+            <span class="room-card-meta-pill">{{$.RoleLabel .Mode .Role}} · {{$.ModeLabel .Mode}}</span>
+          </div>
+          <div class="room-card-chips">
+            {{if gt .MenteeCount 0}}<span class="card-chip">{{$.Tf "room.card.mentees" .MenteeCount}}</span>{{end}}
+            {{if gt .PendingReviews 0}}<span class="card-chip warn">{{$.Tf "room.card.pending" .PendingReviews}}</span>{{end}}
+            {{if gt .OverdueTasks 0}}<span class="card-chip danger">{{$.Tf "room.card.overdue" .OverdueTasks}}</span>{{end}}
+            {{if and (eq .MenteeCount 0) (eq .PendingReviews 0) (eq .OverdueTasks 0)}}<span class="card-chip muted">{{$.T "room.card.empty"}}</span>{{end}}
+            {{if .LastActivity}}<span class="card-chip-time">{{$.Tf "room.card.last_activity" .LastActivity}}</span>{{end}}
+          </div>
+        </a>
       {{else}}
         <div class="empty-inline"><strong>{{$.T "mentor.rooms.empty.title"}}</strong><p class="muted">{{$.T "mentor.rooms.empty.body"}}</p></div>
       {{end}}
@@ -321,10 +374,32 @@
   <section class="panel">
     <div class="section-head"><div><p class="eyebrow">{{.T "mentee.rooms.eyebrow"}}</p><h2>{{.T "mentee.rooms.title"}}</h2></div></div>
     <div class="mini-room-list">
-      {{range .MenteeDash.Rooms}}<a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{$.RoleLabel .Mode .Role}} · {{$.ModeLabel .Mode}}</span></a>{{else}}<div class="empty-inline"><strong>{{$.T "mentee.rooms.empty.title"}}</strong><p class="muted">{{$.T "mentee.rooms.empty.body"}}</p></div>{{end}}
+      {{range .MenteeDash.Rooms}}
+        <a class="room-card-link" href="/rooms/{{.ID}}">
+          <div class="room-card-head">
+            <strong>{{.Name}}</strong>
+            <span class="room-card-meta-pill">{{$.RoleLabel .Mode .Role}} · {{$.ModeLabel .Mode}}</span>
+          </div>
+          <div class="room-card-chips">
+            {{if gt .PendingReviews 0}}<span class="card-chip warn">{{$.Tf "room.card.awaiting" .PendingReviews}}</span>{{end}}
+            {{if gt .OverdueTasks 0}}<span class="card-chip danger">{{$.Tf "room.card.overdue" .OverdueTasks}}</span>{{end}}
+            {{if and (eq .PendingReviews 0) (eq .OverdueTasks 0)}}<span class="card-chip muted">{{$.T "room.card.caught_up"}}</span>{{end}}
+            {{if .LastActivity}}<span class="card-chip-time">{{$.Tf "room.card.last_activity" .LastActivity}}</span>{{end}}
+          </div>
+        </a>
+      {{else}}<div class="empty-inline"><strong>{{$.T "mentee.rooms.empty.title"}}</strong><p class="muted">{{$.T "mentee.rooms.empty.body"}}</p></div>{{end}}
     </div>
   </section>
 </div>
+
+<section class="panel join-with-code">
+  <div class="section-head"><div><p class="eyebrow">{{.T "mentee.join.eyebrow"}}</p><h2>{{.T "mentee.join.title"}}</h2></div></div>
+  <p class="muted">{{.T "mentee.join.help"}}</p>
+  <form method="get" action="/join" class="inline">
+    <input name="code" type="text" maxlength="120" placeholder="{{.T "mentee.join.placeholder"}}" aria-label="{{.T "mentee.join.title"}}">
+    <button type="submit">{{.T "mentee.join.submit"}}</button>
+  </form>
+</section>
 
 <section class="panel">
   <div class="section-head"><div><p class="eyebrow">{{.T "mentee.reports.eyebrow"}}</p><h2>{{.T "mentee.reports.title"}}</h2></div></div>
@@ -501,7 +576,44 @@
 </section>
 
 {{if eq .Room.Role "mentor"}}
-<div class="mentor-tools">
+{{/* Create work item gets a full-width row so the form (assignee +
+     title + detail + resource + deadline) has room to breathe and
+     doesn't squeeze the right column. */}}
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{.Tf "room.create.eyebrow" .Room.WorkLabel}}</p>
+      <h2>{{.Tf "room.create.title" .Room.WorkLabel}}</h2>
+    </div>
+  </div>
+  {{if .RoomMentees}}
+  <form method="post" action="/rooms/{{.Room.ID}}/tasks" class="stack create-task-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    {{if eq .Room.Mode "mentorship"}}
+    <label>{{.T "form.assignee"}}
+      <select name="assigned_to" required>
+        <option value="all">{{.Tf "room.assign.all" (len .RoomMentees)}}</option>
+        {{range .RoomMentees}}<option value="{{.UserID}}">{{.Name}}</option>{{end}}
+      </select>
+    </label>
+    {{end}}
+    <label>{{.T "form.title"}} <input name="title" required {{if eq .Room.Mode "classroom"}}placeholder="{{.T "room.classroom.publish.placeholder.title"}}"{{end}}></label>
+    <label>{{if eq .Room.Mode "classroom"}}{{.T "form.instructions"}}{{else}}{{.T "form.detail"}}{{end}}
+      <textarea name="detail" {{if eq .Room.Mode "classroom"}}required placeholder="{{.T "room.classroom.publish.placeholder.instructions"}}"{{end}}></textarea>
+    </label>
+    <label>{{.T "form.resource_link"}} <input name="resource_url" type="url" placeholder="{{.T "room.classroom.submit.placeholder.link"}}"></label>
+    <label>{{.T "form.deadline"}} <input name="due_date" type="date" {{if eq .Room.Mode "classroom"}}required{{end}}></label>
+    <div class="form-actions"><button type="submit">{{.Tf "room.create.submit" .Room.WorkLabel}}</button></div>
+  </form>
+  {{else}}
+  <p class="muted">{{.T "room.assign.empty"}}</p>
+  {{end}}
+</section>
+
+{{/* Invite + Room Settings: similar density, both small mentor-only
+     admin tasks — paired side-by-side. When the room is 1:1 (no Room
+     Settings shown), Invite spans full width via .mentor-tools.solo. */}}
+<div class="mentor-tools{{if le (len .RoomMentees) 1}} solo{{end}}">
   <section class="panel" id="invite">
     <div class="section-head">
       <div>
@@ -524,37 +636,6 @@
     </form>
     <p class="muted invite-help">{{.T "room.invite.help"}}</p>
     <div id="invite-result"></div>
-  </section>
-
-  <section class="panel">
-    <div class="section-head">
-      <div>
-        <p class="eyebrow">{{.Tf "room.create.eyebrow" .Room.WorkLabel}}</p>
-        <h2>{{.Tf "room.create.title" .Room.WorkLabel}}</h2>
-      </div>
-    </div>
-    {{if .RoomMentees}}
-    <form method="post" action="/rooms/{{.Room.ID}}/tasks" class="stack">
-      <input type="hidden" name="csrf" value="{{.CSRF}}">
-      {{if eq .Room.Mode "mentorship"}}
-      <label>{{.T "form.assignee"}}
-        <select name="assigned_to" required>
-          <option value="all">{{.Tf "room.assign.all" (len .RoomMentees)}}</option>
-          {{range .RoomMentees}}<option value="{{.UserID}}">{{.Name}}</option>{{end}}
-        </select>
-      </label>
-      {{end}}
-      <label>{{.T "form.title"}} <input name="title" required {{if eq .Room.Mode "classroom"}}placeholder="{{.T "room.classroom.publish.placeholder.title"}}"{{end}}></label>
-      <label>{{if eq .Room.Mode "classroom"}}{{.T "form.instructions"}}{{else}}{{.T "form.detail"}}{{end}}
-        <textarea name="detail" {{if eq .Room.Mode "classroom"}}required placeholder="{{.T "room.classroom.publish.placeholder.instructions"}}"{{end}}></textarea>
-      </label>
-      <label>{{.T "form.resource_link"}} <input name="resource_url" type="url" placeholder="{{.T "room.classroom.submit.placeholder.link"}}"></label>
-      <label>{{.T "form.deadline"}} <input name="due_date" type="date" {{if eq .Room.Mode "classroom"}}required{{end}}></label>
-      <button type="submit">{{.Tf "room.create.submit" .Room.WorkLabel}}</button>
-    </form>
-    {{else}}
-    <p class="muted">{{.T "room.assign.empty"}}</p>
-    {{end}}
   </section>
 
   {{if gt (len .RoomMentees) 1}}
@@ -859,17 +940,20 @@
 {{template "layout_end" .}}{{end}}
 
 {{define "invite_created"}}
+{{/* One prominent action: copy the full join URL. The bare code lives
+     below as a fallback for chats that mangle URLs. */}}
 <div class="invite-result">
-  <p class="alert">
-    {{.T "invite.created.code"}}
-    <code>{{.InviteCode}}</code>
-    <button type="button" class="copy-btn" data-copy="{{.InviteCode}}" data-copied-label="{{.T "invite.created.copied"}}">{{.T "invite.created.copy"}}</button>
+  <p class="invite-result-url">
+    <code>{{.BaseURL}}/join?code={{.InviteCode}}</code>
+    <button type="button" class="copy-btn" data-copy="{{.BaseURL}}/join?code={{.InviteCode}}" data-copied-label="{{.T "invite.created.copied"}}">{{.T "invite.created.copy_link"}}</button>
   </p>
-  <p class="muted">
-    {{.T "invite.created.url"}}
-    <code>/join?code={{.InviteCode}}</code>
-    <button type="button" class="copy-btn" data-copy="/join?code={{.InviteCode}}" data-copied-label="{{.T "invite.created.copied"}}">{{.T "invite.created.copy"}}</button>
-  </p>
+  <details class="invite-result-fallback">
+    <summary>{{.T "invite.created.or_code"}}</summary>
+    <p>
+      <code>{{.InviteCode}}</code>
+      <button type="button" class="copy-btn" data-copy="{{.InviteCode}}" data-copied-label="{{.T "invite.created.copied"}}">{{.T "invite.created.copy"}}</button>
+    </p>
+  </details>
 </div>
 {{end}}
 
@@ -1007,12 +1091,11 @@
 <section class="panel">
   <div class="section-head">
     <div>
-      <p class="eyebrow">{{.T "profile.eyebrow"}}</p>
+      <p class="eyebrow">{{.T "profile.eyebrow.basics"}}</p>
       <h2>{{.T "profile.title"}}</h2>
     </div>
   </div>
   <p class="muted">{{.T "profile.subtitle"}}</p>
-  <h3>{{.T "profile.section.basics"}}</h3>
   <form method="post" action="/profile" class="stack">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>{{.T "profile.field.name"}} <input name="name" required maxlength="80" value="{{.Profile.Name}}"></label>
@@ -1032,7 +1115,7 @@
 </section>
 
 <section class="panel">
-  <div class="section-head"><div><p class="eyebrow">{{.T "profile.eyebrow"}}</p><h2>{{.T "profile.section.password"}}</h2></div></div>
+  <div class="section-head"><div><p class="eyebrow">{{.T "profile.eyebrow.password"}}</p><h2>{{.T "profile.section.password"}}</h2></div></div>
   <form method="post" action="/profile/password" class="stack">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>{{.T "profile.password.current"}} <input name="current_password" type="password" required autocomplete="current-password"></label>
@@ -1043,7 +1126,7 @@
 </section>
 
 <section class="panel">
-  <div class="section-head"><div><p class="eyebrow">{{.T "profile.eyebrow"}}</p><h2>{{.T "profile.section.sessions"}}</h2></div></div>
+  <div class="section-head"><div><p class="eyebrow">{{.T "profile.eyebrow.sessions"}}</p><h2>{{.T "profile.section.sessions"}}</h2></div></div>
   <p class="muted">{{.Tf "profile.sessions.count" .SessionCount}}</p>
   <form method="post" action="/profile/sessions/revoke-others">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
@@ -1052,7 +1135,7 @@
 </section>
 
 <section class="panel">
-  <div class="section-head"><div><p class="eyebrow">{{.T "profile.eyebrow"}}</p><h2>{{.T "profile.section.views"}}</h2></div></div>
+  <div class="section-head"><div><p class="eyebrow">{{.T "profile.eyebrow.views"}}</p><h2>{{.T "profile.section.views"}}</h2></div></div>
   <ul class="self-links">
     <li><a href="/me/growth">{{.T "title.growth"}}</a> <span class="muted">— {{.T "growth.subtitle"}}</span></li>
     <li><a href="/me/grades">{{.T "title.grades"}}</a> <span class="muted">— {{.T "grades.subtitle"}}</span></li>

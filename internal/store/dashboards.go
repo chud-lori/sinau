@@ -7,7 +7,7 @@ import (
 )
 
 func (s *Store) MentorDashboard(userID string) (domain.MentorDashboard, error) {
-	rooms, err := s.RoomsFor(userID)
+	rooms, err := s.DashboardRooms(userID)
 	if err != nil {
 		return domain.MentorDashboard{}, err
 	}
@@ -30,7 +30,7 @@ func (s *Store) MentorDashboard(userID string) (domain.MentorDashboard, error) {
 }
 
 func (s *Store) MenteeDashboard(userID string) (domain.MenteeDashboard, error) {
-	rooms, err := s.RoomsFor(userID)
+	rooms, err := s.DashboardRooms(userID)
 	if err != nil {
 		return domain.MenteeDashboard{}, err
 	}

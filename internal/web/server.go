@@ -23,6 +23,7 @@ type Server struct {
 	tpl                  *template.Template
 	secureCookie         bool
 	staticDir            string
+	publicURL            string
 	dummyHash            string
 	authLimiter          *limiter
 	notificationsEnabled bool
@@ -34,6 +35,12 @@ type Config struct {
 	Templates            string
 	StaticDir            string
 	SecureCookie         bool
+	// PublicURL is the canonical scheme+host the app is served from
+	// (e.g. https://sinau.example.com). Used to render absolute join
+	// links the mentor can paste into a chat. Empty falls back to the
+	// request's own Host header + scheme, which is fine in dev and most
+	// straight-through prod setups.
+	PublicURL            string
 	NotificationsEnabled bool
 	Engagement           *reminder.Engagement
 }
@@ -60,7 +67,6 @@ type PageData struct {
 	SetupNeeded          bool
 	NotificationsEnabled bool
 	UserPoints           int
-	Rooms                []domain.Room
 	Room                 domain.Room
 	InvitePreview        domain.InvitePreview
 	Members              []domain.Member
@@ -90,6 +96,8 @@ type PageData struct {
 	Growth               domain.GrowthMetrics
 	GradeRooms           []domain.GradeRoom
 	WindowDays           int
+	BaseURL              string // canonical scheme+host for absolute links (join URL etc.)
+	ReturnTo             string // safe redirect path round-tripped through forms (login → join)
 }
 
 // T returns the localised string for key in the page's active language.
@@ -137,6 +145,7 @@ func New(cfg Config) (*Server, error) {
 		tpl:                  tpl,
 		secureCookie:         cfg.SecureCookie,
 		staticDir:            cfg.StaticDir,
+		publicURL:            strings.TrimRight(cfg.PublicURL, "/"),
 		dummyHash:            dummy,
 		authLimiter:          newLimiter(0.2, 8),
 		notificationsEnabled: cfg.NotificationsEnabled,
@@ -155,6 +164,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /logout", s.auth(s.logout))
 	mux.HandleFunc("GET /join", s.withUser(s.joinForm))
 	mux.HandleFunc("POST /join", s.rateLimit(s.join))
+	mux.HandleFunc("POST /join/accept", s.auth(s.acceptInvite))
 	mux.HandleFunc("POST /rooms", s.auth(s.createRoom))
 	mux.HandleFunc("GET /rooms/{roomID}", s.auth(s.roomPage))
 	mux.HandleFunc("POST /rooms/{roomID}/invites", s.auth(s.createInvite))
@@ -309,6 +319,30 @@ func safeReturnPath(p string) string {
 	return p
 }
 
+// baseURL returns the canonical scheme://host prefix for absolute
+// links (e.g. join URLs the mentor copies and pastes into a chat).
+// SINAU_PUBLIC_URL wins when set so operators behind a reverse proxy
+// can pin the host; otherwise we derive from the request, honouring
+// X-Forwarded-Proto when present.
+func (s *Server) baseURL(r *http.Request) string {
+	if s.publicURL != "" {
+		return s.publicURL
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		// Trust X-Forwarded-Proto only on the value side; the
+		// caller upstream is supposed to strip incoming copies.
+		// Accept "https" or "http"; ignore weirder values.
+		if proto == "https" || proto == "http" {
+			scheme = proto
+		}
+	}
+	return scheme + "://" + r.Host
+}
+
 // normalizeScore validates and canonicalises a review score against the
 // room's mode. Classroom uses 0–100 (gradebook); mentorship uses 1–5
 // (leaderboard rubric). An empty value is allowed in either mode —
@@ -402,6 +436,7 @@ func (s *Server) pageData(r *http.Request, titleKey string) PageData {
 		SupportedLangs:       i18n.Supported,
 		RequestPath:          safeReturnPath(r.URL.Path),
 		NotificationsEnabled: s.notificationsEnabled,
+		BaseURL:              s.baseURL(r),
 	}
 	if u != nil {
 		pd.User = u
@@ -434,7 +469,6 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		pd := s.pageData(r, "title.dashboard.mentor")
-		pd.Rooms = dash.Rooms
 		pd.MentorDash = dash
 		s.render(w, "mentor_home", pd)
 		return
@@ -445,7 +479,6 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pd := s.pageData(r, "title.dashboard.mentee")
-	pd.Rooms = dash.Rooms
 	pd.MenteeDash = dash
 	s.render(w, "mentee_home", pd)
 }
@@ -520,12 +553,14 @@ func (s *Server) persistLangChoice(r *http.Request, userID string) {
 }
 
 func (s *Server) loginForm(w http.ResponseWriter, r *http.Request) {
+	returnTo := safeReturnPath(r.URL.Query().Get("return_to"))
 	if current(r) != nil {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, returnTo, http.StatusSeeOther)
 		return
 	}
 	pd := s.pageData(r, "title.login")
 	pd.SetupNeeded = s.store.UserCount() == 0
+	pd.ReturnTo = returnTo
 	s.render(w, "login", pd)
 }
 
@@ -550,7 +585,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, safeReturnPath(r.FormValue("return_to")), http.StatusSeeOther)
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
@@ -567,12 +602,55 @@ func (s *Server) joinForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := auth.Clean(r.URL.Query().Get("code"), 120)
+	preview := domain.InvitePreview{}
+	if code != "" {
+		preview = s.store.InvitePreview(code)
+	}
+	// Signed-in user with a valid invite → confirmation page.
+	// Auto-join is intentionally NOT silent: a phishing link in HTML
+	// email (e.g. <img src="…/join?code=…">) would otherwise enrol a
+	// logged-in victim. POST + button click gates consent.
+	if u := current(r); u != nil && preview.Valid {
+		pd := s.pageData(r, "title.join")
+		pd.JoinCode = code
+		pd.InvitePreview = preview
+		s.render(w, "join_confirm", pd)
+		return
+	}
+	// Anonymous (or invalid/missing code) → render the existing
+	// register-with-invite form. When code is valid but the visitor is
+	// not signed in, the template also offers a "Log in instead" link
+	// that round-trips through return_to back to this page.
 	pd := s.pageData(r, "title.join")
 	pd.JoinCode = code
-	if code != "" {
-		pd.InvitePreview = s.store.InvitePreview(code)
-	}
+	pd.InvitePreview = preview
 	s.render(w, "join", pd)
+}
+
+// acceptInvite is the signed-in side of the join flow. The
+// confirmation page (rendered by joinForm) posts here with a CSRF
+// token; we attach the existing user to the room and redirect.
+func (s *Server) acceptInvite(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	if u == nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	code := auth.Clean(r.FormValue("code"), 120)
+	if code == "" {
+		http.Error(w, "invite code required", http.StatusBadRequest)
+		return
+	}
+	roomID, err := s.store.AcceptInvite(code, u.ID)
+	if err != nil {
+		pd := s.pageData(r, "title.join")
+		pd.JoinCode = code
+		pd.InvitePreview = s.store.InvitePreview(code)
+		pd.Error = i18n.T(pd.Lang, "join.error.failed")
+		s.render(w, "join_confirm", pd)
+		return
+	}
+	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
 }
 
 func (s *Server) join(w http.ResponseWriter, r *http.Request) {
