@@ -65,17 +65,28 @@ elsewhere on the instance.
 2. Pick a password.
 3. Post reports / submit assignments. Pick up tasks. Read feedback.
 4. Opt in to deadline reminders at **/settings** if you want them.
+5. Update your name, email, password, or language at **/profile**.
 
 ## What's in the box
 
-- **Progress reports + comments** (Mentorship)
-- **Assignments + submissions** with 1–5 rubric and feedback (Classroom)
-- **Tasks** with deadlines and points
+- **Progress reports + comments** (Mentorship), with edit and soft-delete
+  by the author or the room's mentor
+- **Assignments + submissions** with 1–5 rubric and feedback (Classroom);
+  teachers can edit / remove published assignments
+- **Tasks** with deadlines and points; editable until the mentor has
+  reviewed them
 - **Per-room leaderboards** — optional, off by default, mentors choose
   whether to make them visible to the room
 - **Deadline reminders** — opt-in per user; channels include email, with
   WhatsApp and Telegram wired as preview integrations behind a clean
   notifier interface
+- **Engagement notifications** — when someone comments on your report, a
+  student submits, or a teacher posts feedback, the right person gets
+  pinged on their chosen channel. Per-user opt-out separate from
+  deadline reminders.
+- **Account self-service** at `/profile` — change name, email, language,
+  password (revokes other sessions), and see / sign out other active
+  sessions.
 - **Per-user notification settings** at `/settings`
 - **In-app help** at `/help` for both mentors/teachers and mentees/students
 

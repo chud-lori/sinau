@@ -283,9 +283,11 @@ Controls:
 
 ```sh
 # Master switch. false → no reminder worker, no /settings, no Notifications
-# section on /help, no Settings link in the topbar.
+# section on /help, no Settings link in the topbar, AND no engagement
+# notifications (comment / submission / feedback pings).
 SINAU_NOTIFICATIONS_ENABLED=true
-# Granular switch: false keeps the UI but pauses dispatch.
+# Granular switch: false keeps /settings, /profile, and engagement
+# notifications working but pauses the deadline-reminder ticker.
 SINAU_REMINDERS=true
 SINAU_REMINDER_INTERVAL=1h
 SINAU_REMINDER_WINDOW=24h

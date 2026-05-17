@@ -33,7 +33,7 @@ database process, no container required.
 | `internal/store`    | SQLite migrations + every SQL query in the app. The only package that imports `database/sql`. |
 | `internal/web`      | HTTP routes, middleware (CSRF, rate limit, auth, security headers), handlers, template rendering. |
 | `internal/reminder` | `Notifier` interface, channel implementations (log, email, whatsapp stub, telegram stub), the `Worker` loop. |
-| `templates/app.html`| Single file holding every server-rendered view as named templates. |
+| `templates/app.html`| Single file holding every server-rendered view as named templates (`landing`, `login`, `join`, `setup`, `mentor_home`, `mentee_home`, `room`, `report`, `report_edit`, `task_edit`, `assignment_edit`, `profile`, `settings`, `help`, `invite_created`, `link_row`, `lang_picker`). |
 | `static/`           | CSS (hand-rolled, design tokens), vendored htmx, SVG favicon. |
 
 ## Data model
@@ -52,16 +52,16 @@ rooms ─< assignments ─< submissions
 
 Key tables:
 
-- **users** — account, password hash, `can_create_rooms` flag.
-- **sessions** — `id_hash` is sha256(token); the raw token lives only in the cookie.
+- **users** — account, password hash, `can_create_rooms`, `language`, `engagement_notif_enabled` (per-user opt-out for non-deadline notifications).
+- **sessions** — `id_hash` is sha256(token); the raw token lives only in the cookie. `created_at` exposed in the /profile sessions section.
 - **rooms** — `mode` (`mentorship` | `classroom`), `leaderboard_visible`.
 - **memberships** — `(room_id, user_id)` PK, `role` (`mentor` | `mentee`).
 - **invites** — single-use codes (`code_hash`) bound to a room + role.
-- **reports** / **comments** — mentorship room artefacts.
-- **tasks** — mentorship room artefacts. `reviewed_at` locks status changes once a mentor awards points.
-- **assignments** / **submissions** — classroom room artefacts. `UNIQUE(assignment_id, student_id)` so resubmits update in place. `reviewed_at = ''` on a submission means it's awaiting review.
+- **reports** / **comments** — mentorship room artefacts. Both carry `edited_at` (stamped on every update) and `deleted_at` (soft-delete; non-empty rows are filtered from every read).
+- **tasks** — mentorship room artefacts. `reviewed_at` locks status changes, edits, AND deletion once a mentor awards points. Same `edited_at` / `deleted_at` columns as reports.
+- **assignments** / **submissions** — classroom room artefacts. `UNIQUE(assignment_id, student_id)` so resubmits update in place. `reviewed_at = ''` on a submission means it's awaiting review. Assignments carry `edited_at` / `deleted_at`; submissions don't (resubmit is the edit path, and they have no soft-delete since the UNIQUE constraint would block re-submission).
 - **points_ledger** — append-only point awards. `UNIQUE(source, source_id)` prevents double-award races.
-- **notification_prefs** — opt-in per user. Channel + contact fields (email lives on `users`, WhatsApp number and Telegram chat ID live here).
+- **notification_prefs** — opt-in per user for deadline reminders. Channel + contact fields (email lives on `users`, WhatsApp number and Telegram chat ID live here). Engagement notifications gate on `users.engagement_notif_enabled` *and* this row.
 
 ## Role model (the layered roles)
 
@@ -99,10 +99,19 @@ Every room-scoped handler calls `store.RoomAccess(roomID, userID)` first; the re
 - `submitAssignment` — requires `role == mentee` **and** `room.Mode == classroom`.
 - `updateRoomSettings`, `createInvite` — require `role == mentor`.
 
-Two idempotency guards in the store layer protect against accidental re-edits:
+Edit / soft-delete handlers follow a shared rule: the author of a piece of content can always edit or delete it; the room's mentor can edit or delete anyone's content in their room.
+
+- `editReport`, `deleteReport` — author OR room mentor.
+- `editComment`, `deleteComment` — author OR room mentor.
+- `editTask`, `deleteTask` — room mentor only (mentees never edit task content; status updates go through `updateTask`).
+- `editAssignment`, `deleteAssignment` — room mentor only, classroom rooms only.
+
+Idempotency / lock guards in the store layer:
 
 - `UpdateTaskStatus` won't change the status of a reviewed task (`WHERE reviewed_at = ''`).
+- `UpdateTask` / `DeleteTask` won't edit or delete a reviewed task — same `reviewed_at = ''` guard, so points already awarded can't be silently undone by deleting the task.
 - `ReviewSubmission` won't overwrite a previously reviewed submission (`WHERE reviewed_at = ''`). Resubmission by the student clears `reviewed_at` so the review cycle can repeat.
+- Every read query filters `deleted_at = ''` so soft-deleted rows disappear from every view in one place; the row stays in the DB for audit.
 
 ## Migrations
 
@@ -118,25 +127,28 @@ closed.
 ## Notifications
 
 ```
-                                              ┌─ off (skip)
-                                              │
-  worker tick → due tasks       ─┐            ├─ log (default fallback)
-                                 ├─→ dispatch ┤
-                worker tick → due assignments ┘├─ email (SMTP via net/smtp)
-                                              │
-                                              ├─ whatsapp (stub: HTTP gateway)
-                                              │
-                                              └─ telegram (stub: Bot API)
+  worker tick   ──┐ due tasks                  ┌─ off (skip)
+                  ├─→ dispatch ────────────────┤
+  worker tick   ──┘ due assignments            ├─ log (default fallback)
+                                               │
+  comment posted ─┐ NotifyEngagement           ├─ email (SMTP via net/smtp)
+  submission made ┼─→ Engagement.Dispatch ─────┤
+  feedback posted ┘ (synchronous, in goroutine)├─ whatsapp (stub)
+                                               │
+                                               └─ telegram (stub)
 ```
 
-- Users opt in at `/settings`. Default state for everyone is `off`.
-- `Notifier` interface has two methods: `NotifyTaskDue(ctx, Recipient, TaskReminder)` for mentorship rooms and `NotifyAssignmentDue(ctx, Recipient, AssignmentReminder)` for classroom rooms. Adding a new channel means implementing both, plus a constant in `internal/domain`.
-- `Worker` holds a `map[channel]Notifier`. At dispatch time it reads each user's `notification_prefs` and routes to the right notifier. Unknown channels are logged and skipped.
+Two dispatch paths, one notifier registry:
+
+- **Deadline reminders** run from the `Worker` goroutine on a ticker. Dedup via `tasks.last_reminded_at` / `assignments.last_reminded_at` — one notification per task or assignment per day across all recipients.
+- **Engagement events** (`reminder.Engagement`) fire synchronously from web handlers after the underlying write commits: a comment on a report → report author; a submission → every mentor in the room; a teacher's feedback → the student. Dispatch is launched in a goroutine so the HTTP request never blocks on SMTP/HTTP fanout. Self-author events are dropped — never notify yourself.
+- `Notifier` interface has three methods: `NotifyTaskDue`, `NotifyAssignmentDue`, `NotifyEngagement(ctx, Recipient, EngagementEvent)`. Adding a new channel means implementing all three, plus a constant in `internal/domain`.
+- The notifier registry is built once in `cmd/sinau/main.go` and shared between the worker and the engagement dispatcher.
 - `EmailNotifier` is real (SMTP, STARTTLS, falls back to log when `SINAU_SMTP_HOST/FROM` is unset).
-- `WhatsAppNotifier` and `TelegramNotifier` are **interface-ready stubs**: full config struct, `Configured()` check, fallback wiring, and TODO blocks pointing at the integration paths (`go-whatsapp-web-multidevice` REST daemon and Telegram Bot API). To finish wiring a channel, fill in the two `Notify*Due` bodies — no changes to migrations, store, worker, or web layer needed.
-- Dedup: `tasks.last_reminded_at` and `assignments.last_reminded_at` set after dispatch — one notification per task or assignment per day across all recipients.
+- `WhatsAppNotifier` and `TelegramNotifier` are **interface-ready stubs**: full config struct, `Configured()` check, fallback wiring, and TODO blocks pointing at the integration paths (`go-whatsapp-web-multidevice` REST daemon and Telegram Bot API). To finish wiring a channel, fill in the three `Notify*` bodies — no changes to migrations, store, worker, or web layer needed.
 - Notification content is localised per recipient: subject/body resolves through `i18n.T` using `users.language`.
-- Master switch: `SINAU_NOTIFICATIONS_ENABLED=false` hides the `/settings` UI, the topbar link, the `/help` section, and skips starting the worker.
+- Two opt-out levels: `notification_prefs.enabled` controls the whole channel (and is the master gate for deadline reminders); `users.engagement_notif_enabled` lets a user keep deadline reminders while silencing engagement pings. Both must be on for an engagement notification to fire.
+- Master switch: `SINAU_NOTIFICATIONS_ENABLED=false` hides the `/settings` UI, the topbar link, the `/help` section, skips starting the worker, AND skips building the engagement dispatcher.
 
 ## Reminder worker
 
@@ -156,8 +168,8 @@ for {
 
 ## Frontend
 
-- Server-rendered HTML via Go `html/template`. Single file (`templates/app.html`) with named templates (`landing`, `login`, `join`, `setup`, `mentor_home`, `mentee_home`, `room`, `report`, `settings`, `help`, `invite_created`).
-- Progressive enhancement via [htmx](https://htmx.org) — only used for the invite form swap (`hx-post`, `hx-target`).
+- Server-rendered HTML via Go `html/template`. Single file (`templates/app.html`) with named templates (`landing`, `login`, `join`, `setup`, `mentor_home`, `mentee_home`, `room`, `report`, `report_edit`, `task_edit`, `assignment_edit`, `profile`, `settings`, `help`, `invite_created`, plus the `link_row` and `lang_picker` partials).
+- Progressive enhancement via [htmx](https://htmx.org) — used for the invite form swap and the "add another link" multi-link inputs (`hx-get`, `hx-target`, `hx-swap=beforeend`).
 - Hand-rolled CSS with design tokens (`--bg`, `--accent`, `--line`, etc.) plus mobile breakpoints at 860px and 640px.
 - No JS build. No npm. htmx is vendored as a single file.
 - Layered role display is centralised in three `domain.Room` methods (`RoleLabel`, `MyRoleLabel`, `ModeLabel`) so templates never render raw `mentor`/`mentee`/`classroom` strings.
@@ -195,4 +207,5 @@ Test coverage focuses on the store (which encodes authorization rules) and on we
 
 - `Assignment.MySubmissionStatus/URL/Feedback/Score` are viewer-specific fields on what should be a clean domain type. Refactor when the next feature touches submission shape; pure code-organisation, no user impact.
 - No pagination on `Reports` (`LIMIT 80`), `Submissions`, `Members`, `Assignments`. Acceptable for small rooms; revisit if one room ever exceeds ~30 mentees with months of weekly history.
-- Submission-received notifications (teacher gets pinged when a mentee submits) are not yet wired. Only deadline reminders fire today, on both sides.
+- Soft-deleted rows are never reaped. `deleted_at` rows stay forever — fine until a heavy churn user accumulates noise. A background sweeper that hard-deletes rows past N days is a cheap follow-up.
+- Engagement notifications fire in fire-and-forget goroutines; a failure (SMTP down, network blip) is logged and lost. No retry queue, no surface in the UI. Acceptable for v1; if these become load-bearing, route through a persistent outbox.
