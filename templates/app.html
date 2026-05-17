@@ -23,6 +23,7 @@
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/copy.js" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -347,364 +348,148 @@
   </div>
 </div>
 
-{{if and (eq .Room.Role "mentor") (eq .Room.Mode "classroom")}}
-<section class="stats">
-  <div class="stat-card neutral"><span>{{.T "room.classroom.stats.students"}}</span><strong>{{len .RoomMentees}}</strong></div>
-  <div class="stat-card good"><span>{{.T "room.classroom.stats.assignments"}}</span><strong>{{len .Assignments}}</strong></div>
-  <div class="stat-card warn"><span>{{.T "room.classroom.stats.submissions"}}</span><strong>{{len .Submissions}}</strong></div>
-  <div class="stat-card danger"><span>{{.T "room.classroom.stats.need_review"}}</span><strong>{{.PendingReviews}}</strong></div>
-</section>
+{{if eq .Room.Role "mentor"}}
+  {{if eq .Room.Mode "classroom"}}
+  <section class="stats">
+    <div class="stat-card neutral"><span>{{.T "room.classroom.stats.students"}}</span><strong>{{len .RoomMentees}}</strong></div>
+    <div class="stat-card good"><span>{{.T "room.classroom.stats.assignments"}}</span><strong>{{len .Tasks}}</strong></div>
+    <div class="stat-card warn"><span>{{.T "room.classroom.stats.submissions"}}</span><strong>{{len .Submissions}}</strong></div>
+    <div class="stat-card danger"><span>{{.T "room.classroom.stats.need_review"}}</span><strong>{{.PendingReviews}}</strong></div>
+  </section>
+  {{else}}
+  <section class="stats">
+    <div class="stat-card danger"><span>{{.T "room.mentor.stats.blocked"}}</span><strong>{{.Stats.BlockedReports}}</strong></div>
+    <div class="stat-card warn"><span>{{.T "room.mentor.stats.waiting"}}</span><strong>{{.Stats.WaitingReports}}</strong></div>
+    <div class="stat-card neutral"><span>{{.T "room.mentor.stats.inactive"}}</span><strong>{{.Stats.InactiveMentees}}</strong></div>
+    <div class="stat-card good"><span>{{.T "room.mentor.stats.open"}}</span><strong>{{.Stats.OpenTasks}}</strong></div>
+  </section>
+  {{end}}
+{{end}}
 
-<section class="priority-panel">
-  <div>
-    <p class="eyebrow">{{.T "room.classroom.queue.eyebrow"}}</p>
-    <h2>{{.T "room.classroom.queue.title"}}</h2>
+{{/* Mentorship-only: weekly check-in + reports timeline live here */}}
+{{if and (eq .Room.Mode "mentorship") (eq .Room.Role "mentee")}}
+<section class="panel primary-panel checkin-panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{.T "room.checkin.eyebrow"}}</p>
+      <h2>{{.T "room.checkin.title"}}</h2>
+    </div>
   </div>
-  <div class="priority-grid">
-    <a href="#assignments"><strong>{{len .Assignments}}</strong><span>{{.T "room.classroom.queue.published"}}</span></a>
-    <a href="#submissions"><strong>{{len .Submissions}}</strong><span>{{.T "room.classroom.queue.received"}}</span></a>
-    <a href="#invite"><strong>{{len .RoomMentees}}</strong><span>{{.T "room.classroom.queue.enrolled"}}</span></a>
-  </div>
-</section>
-{{else if eq .Room.Role "mentor"}}
-<section class="stats">
-  <div class="stat-card danger"><span>{{.T "room.mentor.stats.blocked"}}</span><strong>{{.Stats.BlockedReports}}</strong></div>
-  <div class="stat-card warn"><span>{{.T "room.mentor.stats.waiting"}}</span><strong>{{.Stats.WaitingReports}}</strong></div>
-  <div class="stat-card neutral"><span>{{.T "room.mentor.stats.inactive"}}</span><strong>{{.Stats.InactiveMentees}}</strong></div>
-  <div class="stat-card good"><span>{{.T "room.mentor.stats.open"}}</span><strong>{{.Stats.OpenTasks}}</strong></div>
-</section>
-
-<section class="priority-panel">
-  <div>
-    <p class="eyebrow">{{.T "room.mentor.queue.eyebrow"}}</p>
-    <h2>{{.T "room.mentor.queue.title"}}</h2>
-  </div>
-  <div class="priority-grid">
-    <a href="#reports"><strong>{{.Stats.BlockedReports}}</strong><span>{{.T "room.mentor.queue.blockers"}}</span></a>
-    <a href="#reports"><strong>{{.Stats.WaitingReports}}</strong><span>{{.T "room.mentor.queue.reports"}}</span></a>
-    <a href="#tasks"><strong>{{.Stats.OverdueTasks}}</strong><span>{{.T "room.mentor.queue.overdue"}}</span></a>
-  </div>
+  <p class="muted form-intro">{{.T "room.checkin.intro"}}</p>
+  <form method="post" action="/rooms/{{.Room.ID}}/reports" class="stack">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>{{.T "form.learned"}} <textarea name="learned" required placeholder="{{.T "room.checkin.placeholder.learned"}}"></textarea></label>
+    <label>{{.T "form.practiced"}} <textarea name="practiced" required placeholder="{{.T "room.checkin.placeholder.practiced"}}"></textarea></label>
+    <label>{{.T "form.blocker"}} <textarea name="blocker" placeholder="{{.T "room.checkin.placeholder.blocker"}}"></textarea></label>
+    <label>{{.T "form.next_plan"}} <textarea name="next_plan" required placeholder="{{.T "room.checkin.placeholder.next"}}"></textarea></label>
+    <div class="links-field">
+      <p class="links-label">{{.T "form.links"}}</p>
+      <div id="report-links" class="links-list">
+        {{template "link_row" .}}
+      </div>
+      <button type="button" class="link-add" hx-get="/partials/link-row" hx-target="#report-links" hx-swap="beforeend">{{.T "form.add_link"}}</button>
+    </div>
+    <button type="submit">{{.T "room.checkin.submit"}}</button>
+  </form>
 </section>
 {{end}}
 
-{{if eq .Room.Mode "classroom"}}
-{{if eq .Room.Role "mentee"}}
-<div class="dashboard-grid">
-  <section class="panel primary-panel classroom-panel">
-    <div class="section-head">
-      <div>
-        <p class="eyebrow">{{.T "room.classroom.submit.eyebrow"}}</p>
-        <h2>{{.T "room.classroom.submit.title"}}</h2>
-      </div>
+{{if and (eq .Room.Mode "mentorship") (eq .Room.Role "mentor")}}
+<section class="panel attention-home" id="reports">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{.T "room.reports.eyebrow"}}</p>
+      <h2>{{.T "room.reports.title.mentor"}}</h2>
     </div>
-    {{range .Assignments}}
-      <article class="assignment-card">
-        <div class="item-head">
-          <div>
-            <strong>{{.Title}}</strong>
-            <p class="muted">{{$.Tf "room.due" .DueDate}}</p>
-          </div>
-          {{if .MySubmissionStatus}}<span class="status {{.MySubmissionStatus}}">{{.MySubmissionStatus}}</span>{{else}}<span class="status todo">{{$.T "room.classroom.submit.status_none"}}</span>{{end}}
+  </div>
+  {{range .Reports}}
+    <article class="report-card {{if .Blocker}}has-blocker{{end}}">
+      <div class="item-head">
+        <div>
+          <strong>{{.Author}}</strong>
+          <p class="muted">{{.CreatedAt}}{{if .EditedAt}} · {{$.Tf "edited.indicator.with" .EditedAt}}{{end}}</p>
         </div>
-        <p>{{.Instructions}}</p>
-        <div class="report-actions">
-          {{if .ResourceURL}}<a href="{{.ResourceURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_resource"}}</a>{{end}}
-          {{range .MySubmissionLinks}}<a href="{{.URL}}" rel="noreferrer" target="_blank">{{.Label}}</a>{{end}}
-        </div>
-        {{if .MyFeedback}}<p class="feedback-note"><strong>{{$.T "room.classroom.submit.feedback"}}</strong> {{.MyFeedback}}{{if .MyScore}} · {{$.Tf "room.classroom.submit.score" .MyScore}}{{end}}</p>{{end}}
-        <form method="post" action="/rooms/{{$.Room.ID}}/assignments/{{.ID}}/submissions" class="stack submission-form">
+        <a class="comment-link" href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.Tf "room.comments" .Comments}}</a>
+      </div>
+      {{if .Blocker}}<p class="blocker">{{$.Tf "room.blocker.label" .Blocker}}</p>{{end}}
+      <p>{{.Learned}}</p>
+      <div class="report-actions">
+        {{range .Links}}<a href="{{.URL}}" rel="noreferrer" target="_blank">{{.Label}}</a>{{end}}
+        <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.T "room.review_report"}}</a>
+        <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}/edit">{{$.T "action.edit"}}</a>
+        <form method="post" action="/rooms/{{$.Room.ID}}/reports/{{.ID}}/delete" class="inline-delete">
           <input type="hidden" name="csrf" value="{{$.CSRF}}">
-          <div class="links-field">
-            <p class="links-label">{{$.T "form.submission_link"}}</p>
-            <div id="links-{{.ID}}" class="links-list">
-              {{if .MySubmissionLinks}}
-                {{range .MySubmissionLinks}}<div class="link-row">
-                  <input name="link_label" type="text" maxlength="120" value="{{.Label}}" placeholder="{{$.T "form.link_label_placeholder"}}" aria-label="{{$.T "form.link_label"}}">
-                  <input name="link_url" type="url" maxlength="400" value="{{.URL}}" placeholder="https://..." aria-label="{{$.T "form.link_url"}}">
-                </div>{{end}}
-              {{else}}
-                {{template "link_row" $}}
-              {{end}}
-            </div>
-            <button type="button" class="link-add" hx-get="/partials/link-row" hx-target="#links-{{.ID}}" hx-swap="beforeend">{{$.T "form.add_link"}}</button>
-          </div>
-          <label>{{$.T "form.note"}} <textarea name="note" placeholder="{{$.T "room.classroom.submit.placeholder.note"}}"></textarea></label>
-          <button type="submit">{{if .MySubmissionStatus}}{{$.T "room.classroom.submit.button.update"}}{{else}}{{$.T "room.classroom.submit.button.submit"}}{{end}}</button>
+          <button type="submit" class="link danger">{{$.T "action.delete"}}</button>
         </form>
-      </article>
-    {{else}}
-      <div class="empty-inline action-empty"><strong>{{.T "room.classroom.submit.empty.title"}}</strong><p class="muted">{{.T "room.classroom.submit.empty.body"}}</p></div>
-    {{end}}
-  </section>
-  <section class="panel" id="submissions">
-    <div class="section-head"><div><p class="eyebrow">{{.T "room.classroom.members.eyebrow"}}</p><h2>{{.T "room.classroom.members.title"}}</h2></div></div>
-    <div class="mini-room-list">
-      {{range .Members}}<div class="member-pill"><strong>{{.Name}}</strong><span>{{$.RoleLabel $.Room.Mode .Role}}</span></div>{{end}}
-    </div>
-  </section>
-</div>
-{{else}}
-<div class="dashboard-grid mentor-room-grid">
-  <section class="panel primary-panel classroom-panel">
-    <div class="section-head">
-      <div>
-        <p class="eyebrow">{{.T "room.classroom.publish.eyebrow"}}</p>
-        <h2>{{.T "room.classroom.publish.title"}}</h2>
       </div>
-    </div>
-    <form method="post" action="/rooms/{{.Room.ID}}/assignments" class="stack">
-      <input type="hidden" name="csrf" value="{{.CSRF}}">
-      <label>{{.T "form.title"}} <input name="title" required placeholder="{{.T "room.classroom.publish.placeholder.title"}}"></label>
-      <label>{{.T "form.instructions"}} <textarea name="instructions" required placeholder="{{.T "room.classroom.publish.placeholder.instructions"}}"></textarea></label>
-      <label>{{.T "form.resource_link"}} <input name="resource_url" type="url" placeholder="{{.T "room.classroom.submit.placeholder.link"}}"></label>
-      <label>{{.T "form.deadline"}} <input name="due_date" type="date" required></label>
-      <button type="submit">{{.T "room.classroom.publish.button"}}</button>
-    </form>
-  </section>
-  <section class="panel">
-    <div class="section-head"><div><p class="eyebrow">{{.T "room.classroom.queue.eyebrow.submissions"}}</p><h2>{{.T "room.classroom.queue.title.review"}}</h2></div></div>
-    {{range .Submissions}}
-      <article class="submission-card">
-        <div class="item-head">
-          <div><strong>{{.StudentName}}</strong><p class="muted">{{.AssignmentTitle}} · {{.SubmittedAt}}</p></div>
-          <span class="status {{.Status}}">{{.Status}}</span>
-        </div>
-        {{if .Note}}<p>{{.Note}}</p>{{end}}
-        <p class="report-actions">{{range .Links}}<a href="{{.URL}}" rel="noreferrer" target="_blank">{{.Label}}</a>{{end}}</p>
-        {{if eq .Status "submitted"}}
-          <form method="post" action="/rooms/{{$.Room.ID}}/submissions/{{.ID}}/review" class="review-form">
-            <input type="hidden" name="csrf" value="{{$.CSRF}}">
-            <select name="status" aria-label="{{$.T "room.classroom.review.aria"}}">
-              <option value="reviewed">{{$.T "room.classroom.review.status.reviewed"}}</option>
-              <option value="revise">{{$.T "room.classroom.review.status.revise"}}</option>
-            </select>
-            <input name="score" type="number" inputmode="numeric" min="0" max="100" placeholder="{{$.T "room.classroom.review.score_placeholder"}}">
-            <textarea name="feedback" placeholder="{{$.T "room.classroom.review.feedback_placeholder"}}"></textarea>
-            <button type="submit">{{$.T "room.classroom.review.submit"}}</button>
-          </form>
-        {{else}}
-          <p class="feedback-note">
-            <strong>{{$.T "room.classroom.review.reviewed"}}{{if .Score}} · {{.Score}}{{end}}{{if .ReviewedAt}} · {{.ReviewedAt}}{{end}}</strong>
-            {{if .Feedback}}<br>{{.Feedback}}{{end}}
-            {{if eq .Status "revise"}}<br><em class="muted">{{$.T "room.classroom.review.waiting_resubmit"}}</em>{{end}}
-          </p>
-        {{end}}
-      </article>
-    {{else}}
-      <div class="empty-inline action-empty"><strong>{{.T "room.classroom.review.empty.title"}}</strong><p class="muted">{{.T "room.classroom.review.empty.body"}}</p></div>
-    {{end}}
-  </section>
-</div>
-
-<section class="panel" id="assignments">
-  <div class="section-head"><div><p class="eyebrow">{{.T "room.classroom.published.eyebrow"}}</p><h2>{{.T "room.classroom.published.title"}}</h2></div></div>
-  <div class="assignment-list">
-    {{range .Assignments}}
-      <article class="assignment-card compact-card">
-        <div class="item-head">
-          <div><strong>{{.Title}}</strong><p class="muted">{{$.Tf "room.due" .DueDate}}{{if .EditedAt}} · {{$.T "edited.indicator"}}{{end}}</p></div>
-          <span class="pill">{{$.Tf "room.classroom.published.fraction" .Submitted .TotalMentees}}</span>
-        </div>
-        <p>{{.Instructions}}</p>
-        <div class="report-actions edit-actions">
-          {{if .ResourceURL}}<a href="{{.ResourceURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_resource"}}</a>{{end}}
-          <a href="/rooms/{{$.Room.ID}}/assignments/{{.ID}}/edit">{{$.T "action.edit"}}</a>
-          <form method="post" action="/rooms/{{$.Room.ID}}/assignments/{{.ID}}/delete" class="inline-delete">
-            <input type="hidden" name="csrf" value="{{$.CSRF}}">
-            <button type="submit" class="link danger">{{$.T "action.delete"}}</button>
-          </form>
-        </div>
-      </article>
-    {{else}}
-      <div class="empty-inline"><strong>{{.T "room.classroom.published.empty.title"}}</strong><p class="muted">{{.T "room.classroom.published.empty.body"}}</p></div>
-    {{end}}
-  </div>
+    </article>
+  {{else}}
+    <div class="empty-inline action-empty"><strong>{{.T "room.reports.empty.mentor.title"}}</strong><p class="muted">{{.T "room.reports.empty.mentor.body"}}</p></div>
+  {{end}}
 </section>
-
-<div class="mentor-tools">
-  <section class="panel" id="invite">
-    <div class="section-head">
-      <div>
-        <p class="eyebrow">{{.T "room.invite.eyebrow"}}</p>
-        <h2>{{.T "room.invite.title"}}</h2>
-      </div>
-    </div>
-    <form hx-post="/rooms/{{.Room.ID}}/invites" hx-target="#invite-result" method="post" class="inline">
-      <input type="hidden" name="csrf" value="{{.CSRF}}">
-      <select name="role">
-        <option value="mentee">{{.T "room.invite.option.student"}}</option>
-        <option value="mentor">{{.T "room.invite.option.teacher"}}</option>
-      </select>
-      <button type="submit">{{.T "room.invite.submit"}}</button>
-    </form>
-    <div id="invite-result"></div>
-  </section>
-
-  <section class="panel" id="members">
-    <div class="section-head">
-      <div>
-        <p class="eyebrow">{{.T "room.members.eyebrow"}}</p>
-        <h2>{{.T "room.members.title.class"}}</h2>
-      </div>
-    </div>
-    <div class="member-list">
-      <div class="table-head"><span>{{.T "room.members.col.name"}}</span><span>{{.T "room.members.col.role"}}</span><span>{{.T "room.members.col.email"}}</span><span>{{.T "room.members.col.open"}}</span></div>
-      {{range .Members}}
-      <div class="member-row">
-        <span class="member-avatar">{{printf "%.1s" .Name}}</span>
-        <strong>{{.Name}}</strong>
-        <span class="pill">{{$.RoleLabel $.Room.Mode .Role}}</span>
-        <span>{{.Email}}</span>
-        <span>{{$.Tf "room.members.open" .OpenTasks}}</span>
-      </div>
-      {{end}}
-    </div>
-  </section>
-</div>
 {{end}}
 
-{{else}}
-{{if eq .Room.Role "mentee"}}
-<div class="dashboard-grid">
-  <section class="panel primary-panel checkin-panel">
-    <div class="section-head">
-      <div>
-        <p class="eyebrow">{{.T "room.checkin.eyebrow"}}</p>
-        <h2>{{.T "room.checkin.title"}}</h2>
-      </div>
+{{/* Unified work surface: tasks (mentorship) and assignments (classroom)
+     share the same card. Labels come from .Room.WorkLabel; the card is a
+     summary that links to /rooms/{id}/tasks/{taskID} for the full
+     submission flow. */}}
+<section class="panel task-panel" id="tasks">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{if eq .Room.Role "mentor"}}{{.T "room.work.eyebrow.mentor"}}{{else}}{{.T "room.work.eyebrow.mentee"}}{{end}}</p>
+      <h2>{{.Tf "room.work.title" .Room.WorkLabel}}</h2>
     </div>
-    <form method="post" action="/rooms/{{.Room.ID}}/reports" class="stack">
-      <input type="hidden" name="csrf" value="{{.CSRF}}">
-      <label>{{.T "form.learned"}} <textarea name="learned" required placeholder="{{.T "room.checkin.placeholder.learned"}}"></textarea></label>
-      <label>{{.T "form.practiced"}} <textarea name="practiced" required placeholder="{{.T "room.checkin.placeholder.practiced"}}"></textarea></label>
-      <label>{{.T "form.blocker"}} <textarea name="blocker" placeholder="{{.T "room.checkin.placeholder.blocker"}}"></textarea></label>
-      <label>{{.T "form.next_plan"}} <textarea name="next_plan" required placeholder="{{.T "room.checkin.placeholder.next"}}"></textarea></label>
-      <div class="links-field">
-        <p class="links-label">{{.T "form.links"}}</p>
-        <div id="report-links" class="links-list">
-          {{template "link_row" .}}
+  </div>
+  {{range .Tasks}}
+    <article class="task-card status-border-{{if .MySubmissionStatus}}{{.MySubmissionStatus}}{{else}}todo{{end}}">
+      <div class="item-head">
+        <div>
+          <a class="task-link" href="/rooms/{{$.Room.ID}}/tasks/{{.ID}}"><strong>{{.Title}}</strong></a>
+          <p class="muted">
+            {{if eq $.Room.Role "mentor"}}
+              {{if .AssigneeID}}{{$.Tf "room.work.assigned_to" .Assignee}}{{else}}{{$.T "room.work.broadcast"}}{{end}}
+              {{if .EditedAt}} · {{$.T "edited.indicator"}}{{end}}
+            {{else}}
+              {{if .DueDate}}{{$.Tf "room.due" .DueDate}}{{else}}{{$.T "room.work.no_due"}}{{end}}
+            {{end}}
+          </p>
         </div>
-        <button type="button" class="link-add" hx-get="/partials/link-row" hx-target="#report-links" hx-swap="beforeend">{{.T "form.add_link"}}</button>
-      </div>
-      <button type="submit">{{.T "room.checkin.submit"}}</button>
-    </form>
-  </section>
-
-  <section class="panel task-panel" id="tasks">
-    <div class="section-head">
-      <div>
-        <p class="eyebrow">{{.T "room.tasks.eyebrow"}}</p>
-        <h2>{{.T "room.tasks.title"}}</h2>
-      </div>
-    </div>
-    {{range .Tasks}}
-      <article class="task-card status-border-{{.Status}}">
-        <div class="item-head">
-          <strong>{{.Title}}</strong>
-          <span class="status {{.Status}}">{{.Status}}</span>
-        </div>
-        {{if .Detail}}<p>{{.Detail}}</p>{{end}}
-        <p class="muted">{{$.Tf "room.tasks.assigned_to" .Assignee}}</p>
-        {{if .DueDate}}<p><span class="due-chip {{.DueState}}">{{$.T "room.due_chip"}} {{.DueDate}}</span></p>{{end}}
-        {{if .ReviewedAt}}
-          <p><span class="pill point-chip">{{$.Tf "room.tasks.reviewed" .PointsAwarded}}</span></p>
-        {{else if eq .Status "done"}}
-          <p class="muted">{{$.T "room.tasks.awaiting"}}</p>
+        {{if eq $.Room.Role "mentor"}}
+          {{if .AssigneeID}}
+            <span class="status {{if .MySubmissionStatus}}{{.MySubmissionStatus}}{{else}}todo{{end}}">{{$.T (printf "room.work.status.%s" (or .MySubmissionStatus "todo"))}}</span>
+          {{else}}
+            <span class="pill">{{$.Tf "room.work.fraction" .Submitted .TotalStudents}}</span>
+          {{end}}
         {{else}}
-          <form class="task-update" method="post" action="/rooms/{{$.Room.ID}}/tasks/{{.ID}}/status">
-            <input type="hidden" name="csrf" value="{{$.CSRF}}">
-            <select name="status" aria-label="{{$.T "room.tasks.status_aria"}}">
-              <option value="todo" {{if eq .Status "todo"}}selected{{end}}>{{$.T "room.tasks.status.todo"}}</option>
-              <option value="doing" {{if eq .Status "doing"}}selected{{end}}>{{$.T "room.tasks.status.doing"}}</option>
-              <option value="done" {{if eq .Status "done"}}selected{{end}}>{{$.T "room.tasks.status.done"}}</option>
-            </select>
-            <button type="submit">{{$.T "room.tasks.update"}}</button>
-          </form>
+          <span class="status {{if .MySubmissionStatus}}{{.MySubmissionStatus}}{{else}}todo{{end}}">{{$.T (printf "room.work.status.%s" (or .MySubmissionStatus "todo"))}}</span>
         {{end}}
-      </article>
-    {{else}}<div class="empty-inline action-empty"><strong>{{.T "room.tasks.empty.mentee.title"}}</strong><p class="muted">{{.T "room.tasks.empty.mentee.body"}}</p></div>{{end}}
-  </section>
-</div>
-{{else}}
-<div class="dashboard-grid mentor-room-grid">
-  <section class="panel attention-home" id="reports">
-    <div class="section-head">
-      <div>
-        <p class="eyebrow">{{.T "room.reports.eyebrow"}}</p>
-        <h2>{{.T "room.reports.title.mentor"}}</h2>
       </div>
-    </div>
-    {{range .Reports}}
-      <article class="report-card {{if .Blocker}}has-blocker{{end}}">
-        <div class="item-head">
-          <div>
-            <strong>{{.Author}}</strong>
-            <p class="muted">{{.CreatedAt}}{{if .EditedAt}} · {{$.Tf "edited.indicator.with" .EditedAt}}{{end}}</p>
-          </div>
-          <a class="comment-link" href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.Tf "room.comments" .Comments}}</a>
-        </div>
-        {{if .Blocker}}<p class="blocker">{{$.Tf "room.blocker.label" .Blocker}}</p>{{end}}
-        <p>{{.Learned}}</p>
-        <div class="report-actions">
-          {{range .Links}}<a href="{{.URL}}" rel="noreferrer" target="_blank">{{.Label}}</a>{{end}}
-          <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.T "room.review_report"}}</a>
-          <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}/edit">{{$.T "action.edit"}}</a>
-          <form method="post" action="/rooms/{{$.Room.ID}}/reports/{{.ID}}/delete" class="inline-delete">
-            <input type="hidden" name="csrf" value="{{$.CSRF}}">
-            <button type="submit" class="link danger">{{$.T "action.delete"}}</button>
-          </form>
-        </div>
-      </article>
-    {{else}}
-      <div class="empty-inline action-empty"><strong>{{.T "room.reports.empty.mentor.title"}}</strong><p class="muted">{{.T "room.reports.empty.mentor.body"}}</p></div>
-    {{end}}
-  </section>
-
-  <section class="panel task-panel" id="tasks">
-    <div class="section-head">
-      <div>
-        <p class="eyebrow">{{.T "room.tasks.execution_eyebrow"}}</p>
-        <h2>{{.T "room.tasks.execution_title"}}</h2>
-      </div>
-    </div>
-    {{range .Tasks}}
-      <article class="task-card status-border-{{.Status}}">
-        <div class="item-head">
-          <strong>{{.Title}}</strong>
-          <span class="status {{.Status}}">{{.Status}}</span>
-        </div>
-        {{if .Detail}}<p>{{.Detail}}</p>{{end}}
-        <p class="muted">{{$.Tf "room.tasks.assigned_to" .Assignee}}{{if .EditedAt}} · {{$.T "edited.indicator"}}{{end}}</p>
-        {{if .DueDate}}<p><span class="due-chip {{.DueState}}">{{$.T "room.due_chip"}} {{.DueDate}}</span></p>{{end}}
-        {{if .ReviewedAt}}
-          <p><span class="pill point-chip">{{$.Tf "room.tasks.awarded" .PointsAwarded}}</span></p>
-        {{else if eq .Status "done"}}
-          <form class="rubric" method="post" action="/rooms/{{$.Room.ID}}/tasks/{{.ID}}/review">
-            <input type="hidden" name="csrf" value="{{$.CSRF}}">
-            <span class="rubric-label">{{$.T "room.rubric.label"}}</span>
-            <button type="submit" name="points" value="1" title="{{$.T "room.rubric.title1"}}">1</button>
-            <button type="submit" name="points" value="2">2</button>
-            <button type="submit" name="points" value="3" title="{{$.T "room.rubric.title3"}}">3</button>
-            <button type="submit" name="points" value="4">4</button>
-            <button type="submit" name="points" value="5" title="{{$.T "room.rubric.title5"}}">5</button>
-          </form>
-        {{end}}
-        {{if not .ReviewedAt}}
-        <div class="report-actions edit-actions">
+      {{if .Detail}}<p>{{.Detail}}</p>{{end}}
+      {{if .DueDate}}<p><span class="due-chip {{.DueState}}">{{$.T "room.due_chip"}} {{.DueDate}}</span></p>{{end}}
+      <div class="report-actions edit-actions">
+        <a href="/rooms/{{$.Room.ID}}/tasks/{{.ID}}">{{$.Tf "room.work.open" $.Room.WorkLabel}}</a>
+        {{if .ResourceURL}}<a href="{{.ResourceURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_resource"}}</a>{{end}}
+        {{if eq $.Room.Role "mentor"}}
           <a href="/rooms/{{$.Room.ID}}/tasks/{{.ID}}/edit">{{$.T "action.edit"}}</a>
           <form method="post" action="/rooms/{{$.Room.ID}}/tasks/{{.ID}}/delete" class="inline-delete">
             <input type="hidden" name="csrf" value="{{$.CSRF}}">
             <button type="submit" class="link danger">{{$.T "action.delete"}}</button>
           </form>
-        </div>
         {{end}}
-      </article>
-    {{else}}
-      <div class="empty-inline action-empty"><strong>{{.T "room.tasks.empty.mentor.title"}}</strong><p class="muted">{{.T "room.tasks.empty.mentor.body"}}</p></div>
-    {{end}}
-  </section>
-</div>
-{{end}}
+      </div>
+    </article>
+  {{else}}
+    <div class="empty-inline action-empty">
+      {{if eq .Room.Role "mentor"}}
+        <strong>{{.Tf "room.work.empty.mentor.title" .Room.WorkLabel}}</strong>
+        <p class="muted">{{.T "room.work.empty.mentor.body"}}</p>
+      {{else}}
+        <strong>{{.Tf "room.work.empty.mentee.title" .Room.WorkLabel}}</strong>
+        <p class="muted">{{.T "room.work.empty.mentee.body"}}</p>
+      {{end}}
+    </div>
+  {{end}}
+</section>
 
 {{if eq .Room.Role "mentor"}}
 <div class="mentor-tools">
@@ -718,40 +503,52 @@
     <form hx-post="/rooms/{{.Room.ID}}/invites" hx-target="#invite-result" method="post" class="inline">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <select name="role">
-        <option value="mentee">{{.T "room.invite.option.mentee"}}</option>
-        <option value="mentor">{{.T "room.invite.option.mentor"}}</option>
+        {{if eq .Room.Mode "classroom"}}
+          <option value="mentee">{{.T "room.invite.option.student"}}</option>
+          <option value="mentor">{{.T "room.invite.option.teacher"}}</option>
+        {{else}}
+          <option value="mentee">{{.T "room.invite.option.mentee"}}</option>
+          <option value="mentor">{{.T "room.invite.option.mentor"}}</option>
+        {{end}}
       </select>
       <button type="submit">{{.T "room.invite.submit"}}</button>
     </form>
+    <p class="muted invite-help">{{.T "room.invite.help"}}</p>
     <div id="invite-result"></div>
   </section>
 
   <section class="panel">
     <div class="section-head">
       <div>
-        <p class="eyebrow">{{.T "room.assign.eyebrow"}}</p>
-        <h2>{{.T "room.assign.title"}}</h2>
+        <p class="eyebrow">{{.Tf "room.create.eyebrow" .Room.WorkLabel}}</p>
+        <h2>{{.Tf "room.create.title" .Room.WorkLabel}}</h2>
       </div>
     </div>
     {{if .RoomMentees}}
     <form method="post" action="/rooms/{{.Room.ID}}/tasks" class="stack">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
+      {{if eq .Room.Mode "mentorship"}}
       <label>{{.T "form.assignee"}}
         <select name="assigned_to" required>
           <option value="all">{{.Tf "room.assign.all" (len .RoomMentees)}}</option>
           {{range .RoomMentees}}<option value="{{.UserID}}">{{.Name}}</option>{{end}}
         </select>
       </label>
-      <label>{{.T "form.title"}} <input name="title" required></label>
-      <label>{{.T "form.detail"}} <textarea name="detail"></textarea></label>
-      <label>{{.T "form.deadline"}} <input name="due_date" type="date"></label>
-      <button type="submit">{{.T "room.assign.submit"}}</button>
+      {{end}}
+      <label>{{.T "form.title"}} <input name="title" required {{if eq .Room.Mode "classroom"}}placeholder="{{.T "room.classroom.publish.placeholder.title"}}"{{end}}></label>
+      <label>{{if eq .Room.Mode "classroom"}}{{.T "form.instructions"}}{{else}}{{.T "form.detail"}}{{end}}
+        <textarea name="detail" {{if eq .Room.Mode "classroom"}}required placeholder="{{.T "room.classroom.publish.placeholder.instructions"}}"{{end}}></textarea>
+      </label>
+      <label>{{.T "form.resource_link"}} <input name="resource_url" type="url" placeholder="{{.T "room.classroom.submit.placeholder.link"}}"></label>
+      <label>{{.T "form.deadline"}} <input name="due_date" type="date" {{if eq .Room.Mode "classroom"}}required{{end}}></label>
+      <button type="submit">{{.Tf "room.create.submit" .Room.WorkLabel}}</button>
     </form>
     {{else}}
     <p class="muted">{{.T "room.assign.empty"}}</p>
     {{end}}
   </section>
 
+  {{if gt (len .RoomMentees) 1}}
   <section class="panel" id="room-settings">
     <div class="section-head">
       <div>
@@ -769,8 +566,55 @@
       <button type="submit">{{.T "room.settings.submit"}}</button>
     </form>
   </section>
+  {{end}}
 </div>
 
+{{/* Submission review queue (mentor only, all modes): every submission
+     across every task, newest first, with an inline review form. Tap the
+     task title to jump to its detail page. */}}
+{{if .Submissions}}
+<section class="panel" id="submissions">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{.T "room.classroom.queue.eyebrow.submissions"}}</p>
+      <h2>{{.T "room.classroom.queue.title.review"}}</h2>
+    </div>
+  </div>
+  {{range .Submissions}}
+    <article class="submission-card">
+      <div class="item-head">
+        <div>
+          <strong>{{.StudentName}}</strong>
+          <p class="muted"><a href="/rooms/{{$.Room.ID}}/tasks/{{.TaskID}}">{{.TaskTitle}}</a> · {{.SubmittedAt}}</p>
+        </div>
+        <span class="status {{.Status}}">{{$.T (printf "room.work.status.%s" .Status)}}</span>
+      </div>
+      {{if .Note}}<p>{{.Note}}</p>{{end}}
+      <p class="report-actions">{{range .Links}}<a href="{{.URL}}" rel="noreferrer" target="_blank">{{.Label}}</a>{{end}}</p>
+      {{if eq .Status "submitted"}}
+        <form method="post" action="/rooms/{{$.Room.ID}}/submissions/{{.ID}}/review" class="review-form">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <select name="status" aria-label="{{$.T "room.classroom.review.aria"}}">
+            <option value="reviewed">{{$.T "room.classroom.review.status.reviewed"}}</option>
+            <option value="revise">{{$.T "room.classroom.review.status.revise"}}</option>
+          </select>
+          <input name="score" type="number" inputmode="numeric" min="{{if eq $.Room.Mode "classroom"}}0{{else}}1{{end}}" max="{{$.Room.ScoreMax}}" placeholder="{{if eq $.Room.Mode "classroom"}}{{$.T "room.classroom.review.score_placeholder"}}{{else}}{{$.T "room.mentor.review.score_placeholder"}}{{end}}">
+          <textarea name="feedback" placeholder="{{$.T "room.classroom.review.feedback_placeholder"}}"></textarea>
+          <button type="submit">{{$.T "room.classroom.review.submit"}}</button>
+        </form>
+      {{else}}
+        <p class="feedback-note">
+          <strong>{{$.T "room.classroom.review.reviewed"}}{{if .Score}} · {{.Score}}{{end}}{{if .ReviewedAt}} · {{.ReviewedAt}}{{end}}</strong>
+          {{if .Feedback}}<br>{{.Feedback}}{{end}}
+          {{if eq .Status "revise"}}<br><em class="muted">{{$.T "room.classroom.review.waiting_resubmit"}}</em>{{end}}
+        </p>
+      {{end}}
+    </article>
+  {{end}}
+</section>
+{{end}}
+
+{{if gt (len .RoomMentees) 1}}
 <section class="panel" id="leaderboard">
   <div class="section-head">
     <div>
@@ -788,22 +632,23 @@
   <div class="empty-inline"><strong>{{.T "room.leaderboard.empty.title"}}</strong><p class="muted">{{.T "room.leaderboard.empty.body"}}</p></div>
   {{end}}
 </section>
+{{end}}
 
 <section class="panel" id="members">
   <div class="section-head">
     <div>
       <p class="eyebrow">{{.T "room.members.eyebrow"}}</p>
-      <h2>{{.T "room.members.title"}}</h2>
+      <h2>{{if eq .Room.Mode "classroom"}}{{.T "room.members.title.class"}}{{else}}{{.T "room.members.title"}}{{end}}</h2>
     </div>
   </div>
   <div class="member-list">
-    <div class="table-head"><span>{{.T "room.members.col.name"}}</span><span>{{.T "room.members.col.role"}}</span><span>{{.T "room.members.col.last"}}</span><span>{{.T "room.members.col.tasks"}}</span></div>
+    <div class="table-head"><span>{{.T "room.members.col.name"}}</span><span>{{.T "room.members.col.role"}}</span><span>{{if eq .Room.Mode "classroom"}}{{.T "room.members.col.email"}}{{else}}{{.T "room.members.col.last"}}{{end}}</span><span>{{.T "room.members.col.tasks"}}</span></div>
     {{range .Members}}
     <div class="member-row">
       <span class="member-avatar">{{printf "%.1s" .Name}}</span>
       <strong>{{.Name}}</strong>
       <span class="pill">{{$.RoleLabel $.Room.Mode .Role}}</span>
-      <span>{{if .LastReport}}{{.LastReport}}{{else}}{{$.T "room.members.no_report"}}{{end}}</span>
+      <span>{{if eq $.Room.Mode "classroom"}}{{.Email}}{{else}}{{if .LastReport}}{{.LastReport}}{{else}}{{$.T "room.members.no_report"}}{{end}}{{end}}</span>
       <span>{{$.Tf "room.members.open" .OpenTasks}}</span>
     </div>
     {{end}}
@@ -821,22 +666,27 @@
   </div>
   <div class="score-grid">
     <div><span>{{.T "room.score.points"}}</span><strong>{{.MyPoints}}</strong></div>
-    {{if gt .MyRank.Total 0}}
+    {{if gt .MyRank.Total 1}}
       <div><span>{{.T "room.score.rank"}}</span><strong>#{{.MyRank.Position}} <small>{{.Tf "room.score.of" .MyRank.Total}}</small></strong></div>
     {{end}}
   </div>
-  {{if .Leaderboard}}
-    <p class="muted">{{.T "room.score.visible"}}</p>
-    <ol class="leaderboard">
-      {{range .Leaderboard}}
-        <li {{if eq .UserID $.User.ID}}class="me"{{end}}><span class="rank">#{{.Rank}}</span><strong>{{.Name}}</strong><span class="pill point-chip">{{$.Tf "room.leaderboard.pts" .Points}}</span></li>
-      {{end}}
-    </ol>
+  {{if gt .MyRank.Total 1}}
+    {{if .Leaderboard}}
+      <p class="muted">{{.T "room.score.visible"}}</p>
+      <ol class="leaderboard">
+        {{range .Leaderboard}}
+          <li {{if eq .UserID $.User.ID}}class="me"{{end}}><span class="rank">#{{.Rank}}</span><strong>{{.Name}}</strong><span class="pill point-chip">{{$.Tf "room.leaderboard.pts" .Points}}</span></li>
+        {{end}}
+      </ol>
+    {{else}}
+      <p class="muted">{{.T "room.score.hidden"}}</p>
+    {{end}}
   {{else}}
-    <p class="muted">{{.T "room.score.hidden"}}</p>
+    <p class="muted">{{.T "room.score.solo"}}</p>
   {{end}}
 </section>
 
+{{if eq .Room.Mode "mentorship"}}
 <section class="panel" id="reports">
   <div class="section-head">
     <div>
@@ -873,10 +723,135 @@
 {{end}}
 {{template "layout_end" .}}{{end}}
 
+{{define "task_page"}}{{template "layout_start" .}}
+<p><a class="back-link" href="/rooms/{{.Room.ID}}">{{.Tf "report.back" .Room.Name}}</a></p>
+<section class="panel">
+  <div class="report-title">
+    <div>
+      <p class="eyebrow">{{.Tf "task.detail.eyebrow" .Room.WorkLabel}}</p>
+      <h1>{{.Task.Title}}</h1>
+      <p class="muted">
+        {{if .Task.AssigneeID}}{{.Tf "room.work.assigned_to" .Task.Assignee}}{{else}}{{.T "room.work.broadcast"}}{{end}}
+        {{if .Task.DueDate}} · {{.Tf "room.due" .Task.DueDate}}{{end}}
+        {{if .Task.EditedAt}} · {{.T "edited.indicator"}}{{end}}
+      </p>
+    </div>
+    {{if eq .Room.Role "mentor"}}
+      <span class="pill">{{.Tf "room.work.fraction" .Task.Submitted .Task.TotalStudents}}</span>
+    {{else}}
+      <span class="status {{if .Task.MySubmissionStatus}}{{.Task.MySubmissionStatus}}{{else}}todo{{end}}">{{.T (printf "room.work.status.%s" (or .Task.MySubmissionStatus "todo"))}}</span>
+    {{end}}
+  </div>
+  {{if .Task.Detail}}<div class="task-detail"><p>{{.Task.Detail}}</p></div>{{end}}
+  {{if .Task.ResourceURL}}<p class="report-actions"><a href="{{.Task.ResourceURL}}" rel="noreferrer" target="_blank">{{.T "room.open_resource"}}</a></p>{{end}}
+  {{if eq .Room.Role "mentor"}}
+    <p class="report-actions edit-actions">
+      <a href="/rooms/{{.Room.ID}}/tasks/{{.Task.ID}}/edit">{{.T "action.edit"}}</a>
+      <form method="post" action="/rooms/{{.Room.ID}}/tasks/{{.Task.ID}}/delete" class="inline-delete">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <button type="submit" class="link danger">{{.T "action.delete"}}</button>
+      </form>
+    </p>
+  {{end}}
+</section>
+
+{{if eq .Room.Role "mentee"}}
+{{/* Student submission panel: previous feedback (if any), then a form to
+     submit or update work. Resubmission replaces the row in-place and
+     clears the review state. */}}
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{.T "task.submit.eyebrow"}}</p>
+      <h2>{{if .Task.MySubmissionStatus}}{{.T "task.submit.title.update"}}{{else}}{{.T "task.submit.title.new"}}{{end}}</h2>
+    </div>
+  </div>
+  {{if .Task.MyFeedback}}
+    <p class="feedback-note">
+      <strong>{{.T "room.classroom.submit.feedback"}}</strong> {{.Task.MyFeedback}}
+      {{if .Task.MyScore}} · {{.Tf "task.score.fraction" .Task.MyScore .Room.ScoreMax}}{{end}}
+    </p>
+  {{end}}
+  {{if eq .Task.MySubmissionStatus "revise"}}
+    <p class="muted"><em>{{.T "task.submit.resubmit_prompt"}}</em></p>
+  {{end}}
+  <form method="post" action="/rooms/{{.Room.ID}}/tasks/{{.Task.ID}}/submit" class="stack submission-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="links-field">
+      <p class="links-label">{{.T "form.submission_link"}}</p>
+      <div id="task-links" class="links-list">
+        {{if .Task.MySubmissionLinks}}
+          {{range .Task.MySubmissionLinks}}<div class="link-row">
+            <input name="link_label" type="text" maxlength="120" value="{{.Label}}" placeholder="{{$.T "form.link_label_placeholder"}}" aria-label="{{$.T "form.link_label"}}">
+            <input name="link_url" type="url" maxlength="400" value="{{.URL}}" placeholder="https://..." aria-label="{{$.T "form.link_url"}}">
+          </div>{{end}}
+        {{else}}
+          {{template "link_row" .}}
+        {{end}}
+      </div>
+      <button type="button" class="link-add" hx-get="/partials/link-row" hx-target="#task-links" hx-swap="beforeend">{{.T "form.add_link"}}</button>
+    </div>
+    <label>{{.T "form.note"}} <textarea name="note" placeholder="{{.T "room.classroom.submit.placeholder.note"}}"></textarea></label>
+    <button type="submit">{{if .Task.MySubmissionStatus}}{{.T "room.classroom.submit.button.update"}}{{else}}{{.T "room.classroom.submit.button.submit"}}{{end}}</button>
+  </form>
+</section>
+{{else}}
+{{/* Mentor/teacher view: queue of submissions for this task with inline
+     review forms. Score input is mode-aware (1-5 mentorship, 0-100
+     classroom). */}}
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">{{.T "room.classroom.queue.eyebrow.submissions"}}</p>
+      <h2>{{.T "task.review.title"}}</h2>
+    </div>
+  </div>
+  {{range .Submissions}}
+    <article class="submission-card">
+      <div class="item-head">
+        <div><strong>{{.StudentName}}</strong><p class="muted">{{.SubmittedAt}}</p></div>
+        <span class="status {{.Status}}">{{$.T (printf "room.work.status.%s" .Status)}}</span>
+      </div>
+      {{if .Note}}<p>{{.Note}}</p>{{end}}
+      <p class="report-actions">{{range .Links}}<a href="{{.URL}}" rel="noreferrer" target="_blank">{{.Label}}</a>{{end}}</p>
+      {{if eq .Status "submitted"}}
+        <form method="post" action="/rooms/{{$.Room.ID}}/submissions/{{.ID}}/review" class="review-form">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <select name="status" aria-label="{{$.T "room.classroom.review.aria"}}">
+            <option value="reviewed">{{$.T "room.classroom.review.status.reviewed"}}</option>
+            <option value="revise">{{$.T "room.classroom.review.status.revise"}}</option>
+          </select>
+          <input name="score" type="number" inputmode="numeric" min="{{if eq $.Room.Mode "classroom"}}0{{else}}1{{end}}" max="{{$.Room.ScoreMax}}" placeholder="{{if eq $.Room.Mode "classroom"}}{{$.T "room.classroom.review.score_placeholder"}}{{else}}{{$.T "room.mentor.review.score_placeholder"}}{{end}}">
+          <textarea name="feedback" placeholder="{{$.T "room.classroom.review.feedback_placeholder"}}"></textarea>
+          <button type="submit">{{$.T "room.classroom.review.submit"}}</button>
+        </form>
+      {{else}}
+        <p class="feedback-note">
+          <strong>{{$.T "room.classroom.review.reviewed"}}{{if .Score}} · {{$.Tf "task.score.fraction" .Score $.Room.ScoreMax}}{{end}}{{if .ReviewedAt}} · {{.ReviewedAt}}{{end}}</strong>
+          {{if .Feedback}}<br>{{.Feedback}}{{end}}
+          {{if eq .Status "revise"}}<br><em class="muted">{{$.T "room.classroom.review.waiting_resubmit"}}</em>{{end}}
+        </p>
+      {{end}}
+    </article>
+  {{else}}
+    <div class="empty-inline"><strong>{{.T "task.review.empty.title"}}</strong><p class="muted">{{.T "task.review.empty.body"}}</p></div>
+  {{end}}
+</section>
+{{end}}
+{{template "layout_end" .}}{{end}}
+
 {{define "invite_created"}}
 <div class="invite-result">
-  <p class="alert">{{.T "invite.created.code"}} <code>{{.InviteCode}}</code></p>
-  <p class="muted">{{.T "invite.created.url"}} <code>/join?code={{.InviteCode}}</code></p>
+  <p class="alert">
+    {{.T "invite.created.code"}}
+    <code>{{.InviteCode}}</code>
+    <button type="button" class="copy-btn" data-copy="{{.InviteCode}}" data-copied-label="{{.T "invite.created.copied"}}">{{.T "invite.created.copy"}}</button>
+  </p>
+  <p class="muted">
+    {{.T "invite.created.url"}}
+    <code>/join?code={{.InviteCode}}</code>
+    <button type="button" class="copy-btn" data-copy="/join?code={{.InviteCode}}" data-copied-label="{{.T "invite.created.copied"}}">{{.T "invite.created.copy"}}</button>
+  </p>
 </div>
 {{end}}
 
@@ -980,45 +955,25 @@
 {{template "layout_end" .}}{{end}}
 
 {{define "task_edit"}}{{template "layout_start" .}}
-<p><a class="back-link" href="/rooms/{{.Room.ID}}">{{.Tf "report.back" .Room.Name}}</a></p>
+<p><a class="back-link" href="/rooms/{{.Room.ID}}/tasks/{{.Task.ID}}">{{.Tf "report.back" .Room.Name}}</a></p>
 <section class="panel">
   <div class="section-head">
     <div>
-      <p class="eyebrow">{{.T "task.edit.eyebrow"}}</p>
-      <h2>{{.T "task.edit.title"}}</h2>
+      <p class="eyebrow">{{.Tf "task.edit.eyebrow" .Room.WorkLabel}}</p>
+      <h2>{{.Tf "task.edit.title" .Room.WorkLabel}}</h2>
     </div>
   </div>
   <form method="post" action="/rooms/{{.Room.ID}}/tasks/{{.Task.ID}}/edit" class="stack">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>{{.T "form.title"}} <input name="title" required value="{{.Task.Title}}"></label>
-    <label>{{.T "form.detail"}} <textarea name="detail">{{.Task.Detail}}</textarea></label>
-    <label>{{.T "form.deadline"}} <input name="due_date" type="date" value="{{.Task.DueDate}}"></label>
+    <label>{{if eq .Room.Mode "classroom"}}{{.T "form.instructions"}}{{else}}{{.T "form.detail"}}{{end}}
+      <textarea name="detail" {{if eq .Room.Mode "classroom"}}required{{end}}>{{.Task.Detail}}</textarea>
+    </label>
+    <label>{{.T "form.resource_link"}} <input name="resource_url" type="url" value="{{.Task.ResourceURL}}"></label>
+    <label>{{.T "form.deadline"}} <input name="due_date" type="date" value="{{.Task.DueDate}}" {{if eq .Room.Mode "classroom"}}required{{end}}></label>
     <div class="form-actions">
       <button type="submit">{{.T "action.save"}}</button>
-      <a class="button secondary" href="/rooms/{{.Room.ID}}">{{.T "action.cancel"}}</a>
-    </div>
-  </form>
-</section>
-{{template "layout_end" .}}{{end}}
-
-{{define "assignment_edit"}}{{template "layout_start" .}}
-<p><a class="back-link" href="/rooms/{{.Room.ID}}">{{.Tf "report.back" .Room.Name}}</a></p>
-<section class="panel">
-  <div class="section-head">
-    <div>
-      <p class="eyebrow">{{.T "assignment.edit.eyebrow"}}</p>
-      <h2>{{.T "assignment.edit.title"}}</h2>
-    </div>
-  </div>
-  <form method="post" action="/rooms/{{.Room.ID}}/assignments/{{.Assignment.ID}}/edit" class="stack">
-    <input type="hidden" name="csrf" value="{{.CSRF}}">
-    <label>{{.T "form.title"}} <input name="title" required value="{{.Assignment.Title}}"></label>
-    <label>{{.T "form.instructions"}} <textarea name="instructions" required>{{.Assignment.Instructions}}</textarea></label>
-    <label>{{.T "form.resource_link"}} <input name="resource_url" type="url" value="{{.Assignment.ResourceURL}}"></label>
-    <label>{{.T "form.deadline"}} <input name="due_date" type="date" required value="{{.Assignment.DueDate}}"></label>
-    <div class="form-actions">
-      <button type="submit">{{.T "action.save"}}</button>
-      <a class="button secondary" href="/rooms/{{.Room.ID}}">{{.T "action.cancel"}}</a>
+      <a class="button secondary" href="/rooms/{{.Room.ID}}/tasks/{{.Task.ID}}">{{.T "action.cancel"}}</a>
     </div>
   </form>
 </section>
@@ -1183,6 +1138,12 @@
   <div class="section-head"><div><p class="eyebrow">{{.T "help.points.eyebrow"}}</p><h2>{{.T "help.points.title"}}</h2></div></div>
   <p>{{.T "help.points.body"}}</p>
 </section>
+
+{{if .User}}
+<section class="panel help-section">
+  <p><a href="/onboarding">{{.T "help.onboarding.relink"}}</a></p>
+</section>
+{{end}}
 {{template "layout_end" .}}{{end}}
 
 {{define "onboarding"}}{{template "layout_start" .}}

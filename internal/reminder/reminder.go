@@ -57,8 +57,10 @@ type Recipient struct {
 // for concurrent use; the current worker calls them serially but that is
 // not part of the contract.
 type Notifier interface {
+	// NotifyTaskDue covers deadline reminders for every work item —
+	// mentorship tasks and classroom assignments both flow through
+	// this single method now that the data model has unified them.
 	NotifyTaskDue(ctx context.Context, to Recipient, rem domain.TaskReminder) error
-	NotifyAssignmentDue(ctx context.Context, to Recipient, rem domain.AssignmentReminder) error
 	// NotifyEngagement delivers a non-deadline event (comment on a
 	// report, new submission, posted feedback). Fired from web
 	// handlers, not the worker, so retries/dedup are the caller's
@@ -74,14 +76,8 @@ type Notifier interface {
 type LogNotifier struct{}
 
 func (LogNotifier) NotifyTaskDue(_ context.Context, to Recipient, rem domain.TaskReminder) error {
-	log.Printf("reminder via=log kind=task channel=%s task=%q due=%s room=%q to=%q email=%s role=%s",
-		to.Channel, rem.Title, rem.DueDate, rem.RoomName, to.Name, to.Email, to.Role)
-	return nil
-}
-
-func (LogNotifier) NotifyAssignmentDue(_ context.Context, to Recipient, rem domain.AssignmentReminder) error {
-	log.Printf("reminder via=log kind=assignment channel=%s assignment=%q due=%s class=%q to=%q email=%s",
-		to.Channel, rem.Title, rem.DueDate, rem.RoomName, to.Name, to.Email)
+	log.Printf("reminder via=log channel=%s task=%q due=%s room=%q mode=%s to=%q email=%s",
+		to.Channel, rem.Title, rem.DueDate, rem.RoomName, rem.RoomMode, to.Name, to.Email)
 	return nil
 }
 
@@ -134,38 +130,18 @@ func (w *Worker) Run(ctx context.Context) {
 func (w *Worker) runOnce(ctx context.Context) {
 	now := time.Now().UTC()
 	w.runTaskReminders(ctx, now)
-	if ctx.Err() != nil {
-		return
-	}
-	w.runAssignmentReminders(ctx, now)
 }
 
+// runTaskReminders fans each due task out to every recipient still owed
+// work, then stamps last_reminded_at once per task so the next tick
+// doesn't re-ping the same recipients. The same path handles
+// individually-assigned mentorship tasks and broadcast classroom
+// assignments — the store's DueTaskReminders query returns one row per
+// (task, recipient) pair either way.
 func (w *Worker) runTaskReminders(ctx context.Context, now time.Time) {
 	reminders, err := w.store.DueTaskReminders(now, w.window)
 	if err != nil {
 		log.Printf("task reminder query failed: %v", err)
-		return
-	}
-	for _, rem := range reminders {
-		if ctx.Err() != nil {
-			return
-		}
-		w.dispatchTask(ctx, rem)
-		if err := w.store.MarkTaskReminded(rem.TaskID, time.Now().UTC()); err != nil {
-			log.Printf("task reminder mark failed task=%s: %v", rem.TaskID, err)
-		}
-	}
-}
-
-// runAssignmentReminders fans each due classroom assignment out to every
-// mentee in the room who has not yet submitted. The store returns one
-// row per (assignment, mentee) pair; we dispatch each row, then mark the
-// assignment itself as reminded so the next tick doesn't re-ping the
-// same students.
-func (w *Worker) runAssignmentReminders(ctx context.Context, now time.Time) {
-	reminders, err := w.store.DueAssignmentReminders(now, w.window)
-	if err != nil {
-		log.Printf("assignment reminder query failed: %v", err)
 		return
 	}
 	reminded := map[string]bool{}
@@ -173,13 +149,13 @@ func (w *Worker) runAssignmentReminders(ctx context.Context, now time.Time) {
 		if ctx.Err() != nil {
 			return
 		}
-		w.dispatchAssignment(ctx, rem)
-		reminded[rem.AssignmentID] = true
+		w.dispatchTask(ctx, rem)
+		reminded[rem.TaskID] = true
 	}
 	stamp := time.Now().UTC()
-	for assignmentID := range reminded {
-		if err := w.store.MarkAssignmentReminded(assignmentID, stamp); err != nil {
-			log.Printf("assignment reminder mark failed assignment=%s: %v", assignmentID, err)
+	for taskID := range reminded {
+		if err := w.store.MarkTaskReminded(taskID, stamp); err != nil {
+			log.Printf("task reminder mark failed task=%s: %v", taskID, err)
 		}
 	}
 }
@@ -207,31 +183,5 @@ func (w *Worker) dispatchTask(ctx context.Context, rem domain.TaskReminder) {
 	if err := notifier.NotifyTaskDue(ctx, to, rem); err != nil {
 		log.Printf("reminder send failed channel=%s task=%s user=%s: %v",
 			prefs.Channel, rem.TaskID, rem.AssigneeID, err)
-	}
-}
-
-func (w *Worker) dispatchAssignment(ctx context.Context, rem domain.AssignmentReminder) {
-	prefs := w.store.NotificationPrefsFor(rem.MenteeID)
-	if !prefs.Enabled || prefs.Channel == domain.NotifChannelOff {
-		return
-	}
-	notifier, ok := w.notifiers[prefs.Channel]
-	if !ok {
-		log.Printf("no notifier registered for channel=%q user=%s", prefs.Channel, rem.MenteeID)
-		return
-	}
-	to := Recipient{
-		UserID:   rem.MenteeID,
-		Name:     rem.MenteeName,
-		Channel:  prefs.Channel,
-		Role:     domain.RoleMentee,
-		Language: rem.MenteeLanguage,
-		Email:    rem.MenteeEmail,
-		WhatsApp: prefs.WhatsAppNumber,
-		Telegram: prefs.TelegramChatID,
-	}
-	if err := notifier.NotifyAssignmentDue(ctx, to, rem); err != nil {
-		log.Printf("reminder send failed channel=%s assignment=%s user=%s: %v",
-			prefs.Channel, rem.AssignmentID, rem.MenteeID, err)
 	}
 }

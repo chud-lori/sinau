@@ -104,22 +104,3 @@ func (w *WhatsAppNotifier) NotifyEngagement(ctx context.Context, to Recipient, e
 	return nil
 }
 
-func (w *WhatsAppNotifier) NotifyAssignmentDue(ctx context.Context, to Recipient, rem domain.AssignmentReminder) error {
-	if !w.Configured() {
-		log.Print("whatsapp notifier not configured (SINAU_WHATSAPP_API_URL unset); routing to fallback")
-		return w.fallback.NotifyAssignmentDue(ctx, to, rem)
-	}
-	if to.WhatsApp == "" {
-		log.Printf("recipient user=%s opted for whatsapp but no whatsapp_number on file; routing to fallback", to.UserID)
-		return w.fallback.NotifyAssignmentDue(ctx, to, rem)
-	}
-	lang := i18n.Lang(to.Language)
-	if !i18n.IsValid(lang) {
-		lang = i18n.Default
-	}
-	body := i18n.Tf(lang, "notif.assignment_due.short", rem.Title, rem.RoomName, rem.DueDate)
-	log.Printf("[stub] whatsapp would send kind=assignment to=%s lang=%s body=%q (apiurl=%s)",
-		to.WhatsApp, lang, body, w.cfg.APIURL)
-	_ = w.client
-	return nil
-}

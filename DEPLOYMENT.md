@@ -7,12 +7,36 @@ Sinau is a single Go binary with SQLite storage. The recommended deployment is:
 - `SINAU_SECURE_COOKIE=true` is enabled behind HTTPS.
 - The SQLite database lives in a persistent data directory.
 
+## Build tag: FTS5
+
+The SQLite driver (`github.com/mattn/go-sqlite3`) compiles SQLite's
+full-text-search engine (`/search`) only when the `sqlite_fts5` build
+tag is set. Every `go build` / `go run` / `go test` invocation for
+Sinau **must** pass `-tags sqlite_fts5`, otherwise migrations fail at
+startup with `no such module: fts5`. The repo ships a `Makefile` that
+sets the tag for you:
+
+```sh
+make build    # bin/sinau, with the tag and release ldflags
+make test     # go test -tags sqlite_fts5 ./...
+make vet
+make run      # local dev server
+```
+
+If you're invoking the Go toolchain directly, prepend the tag:
+
+```sh
+go run   -tags sqlite_fts5 ./cmd/sinau
+go test  -tags sqlite_fts5 ./...
+go build -tags sqlite_fts5 -trimpath -ldflags="-s -w" -o bin/sinau ./cmd/sinau
+```
+
 ## Run Locally
 
 From the project directory:
 
 ```sh
-go run ./cmd/sinau
+make run
 ```
 
 Open:
@@ -24,14 +48,13 @@ http://127.0.0.1:8080
 Use a custom address or database:
 
 ```sh
-SINAU_ADDR=127.0.0.1:8090 SINAU_DB=data/dev.db go run ./cmd/sinau
+SINAU_ADDR=127.0.0.1:8090 SINAU_DB=data/dev.db make run
 ```
 
 Build a local binary:
 
 ```sh
-mkdir -p bin
-go build -trimpath -ldflags="-s -w" -o bin/sinau ./cmd/sinau
+make build
 ./bin/sinau
 ```
 
@@ -58,7 +81,7 @@ sudo chown -R sinau:sinau /var/lib/sinau
 Build on the server:
 
 ```sh
-go build -trimpath -ldflags="-s -w" -o sinau ./cmd/sinau
+go build -tags sqlite_fts5 -trimpath -ldflags="-s -w" -o sinau ./cmd/sinau
 sudo install -m 0755 sinau /opt/sinau/sinau
 sudo cp -R templates /opt/sinau/templates
 sudo cp -R static /opt/sinau/static
@@ -67,7 +90,7 @@ sudo cp -R static /opt/sinau/static
 Or build elsewhere for Linux:
 
 ```sh
-GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o sinau ./cmd/sinau
+GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -tags sqlite_fts5 -trimpath -ldflags="-s -w" -o sinau ./cmd/sinau
 ```
 
 Note: the SQLite driver uses CGO. Cross-compiling may require a C toolchain for the target.
@@ -246,7 +269,7 @@ Copy backups off the server with `rsync`, S3-compatible storage, or your existin
 Build and replace the binary:
 
 ```sh
-go build -trimpath -ldflags="-s -w" -o sinau ./cmd/sinau
+go build -tags sqlite_fts5 -trimpath -ldflags="-s -w" -o sinau ./cmd/sinau
 sudo install -m 0755 sinau /opt/sinau/sinau
 sudo cp -R templates /opt/sinau/templates
 sudo cp -R static /opt/sinau/static

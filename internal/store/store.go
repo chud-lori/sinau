@@ -147,52 +147,43 @@ var schemaV1 = []string{
 		edited_at TEXT NOT NULL DEFAULT '',
 		deleted_at TEXT NOT NULL DEFAULT ''
 	)`,
+	// tasks is the unified work-item table for both mentorship and
+	// classroom rooms (the old assignments table was merged in). An
+	// empty assigned_to means "for every mentee/student in the room"
+	// (classroom mode and mentorship "assign to all" both lean on this);
+	// a non-empty assigned_to means "for that one mentee" (mentorship
+	// individual assignment). Status is NOT stored here — it's derived
+	// from the viewer's task_submissions row.
 	`CREATE TABLE IF NOT EXISTS tasks (
 		id TEXT PRIMARY KEY,
 		room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-		assigned_to TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-		assigned_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		assigned_to TEXT NOT NULL DEFAULT '',
 		title TEXT NOT NULL,
 		detail TEXT NOT NULL,
-		status TEXT NOT NULL CHECK(status IN ('todo','doing','done')),
+		resource_url TEXT NOT NULL DEFAULT '',
 		due_date TEXT NOT NULL DEFAULT '',
 		last_reminded_at TEXT NOT NULL DEFAULT '',
-		points_awarded INTEGER NOT NULL DEFAULT 0,
-		reviewed_at TEXT NOT NULL DEFAULT '',
-		reviewed_by TEXT NOT NULL DEFAULT '',
-		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL,
-		edited_at TEXT NOT NULL DEFAULT '',
-		deleted_at TEXT NOT NULL DEFAULT ''
-	)`,
-	`CREATE TABLE IF NOT EXISTS assignments (
-		id TEXT PRIMARY KEY,
-		room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-		created_by TEXT NOT NULL REFERENCES users(id),
-		title TEXT NOT NULL,
-		instructions TEXT NOT NULL,
-		resource_url TEXT NOT NULL,
-		due_date TEXT NOT NULL,
-		last_reminded_at TEXT NOT NULL DEFAULT '',
 		created_at TEXT NOT NULL,
 		edited_at TEXT NOT NULL DEFAULT '',
 		deleted_at TEXT NOT NULL DEFAULT ''
 	)`,
-	`CREATE TABLE IF NOT EXISTS submissions (
+	`CREATE TABLE IF NOT EXISTS task_submissions (
 		id TEXT PRIMARY KEY,
-		assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+		task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
 		student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-		note TEXT NOT NULL,
+		note TEXT NOT NULL DEFAULT '',
 		status TEXT NOT NULL CHECK(status IN ('submitted','reviewed','revise')),
-		feedback TEXT NOT NULL,
+		feedback TEXT NOT NULL DEFAULT '',
 		score TEXT NOT NULL DEFAULT '',
+		reviewed_by TEXT NOT NULL DEFAULT '',
 		submitted_at TEXT NOT NULL,
-		reviewed_at TEXT NOT NULL,
-		UNIQUE(assignment_id, student_id)
+		reviewed_at TEXT NOT NULL DEFAULT '',
+		UNIQUE(task_id, student_id)
 	)`,
-	`CREATE TABLE IF NOT EXISTS submission_links (
+	`CREATE TABLE IF NOT EXISTS task_submission_links (
 		id TEXT PRIMARY KEY,
-		submission_id TEXT NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+		submission_id TEXT NOT NULL REFERENCES task_submissions(id) ON DELETE CASCADE,
 		label TEXT NOT NULL,
 		url TEXT NOT NULL,
 		position INTEGER NOT NULL DEFAULT 0,
@@ -220,14 +211,12 @@ var schemaV1 = []string{
 	`CREATE INDEX IF NOT EXISTS idx_reports_room_created ON reports(room_id, created_at DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_reports_room_user ON reports(room_id, user_id, created_at DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_comments_report_created ON comments(report_id, created_at)`,
-	`CREATE INDEX IF NOT EXISTS idx_tasks_room_status ON tasks(room_id, status)`,
-	`CREATE INDEX IF NOT EXISTS idx_tasks_room_assignee ON tasks(room_id, assigned_to, status)`,
-	`CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date, status)`,
-	`CREATE INDEX IF NOT EXISTS idx_assignments_room_due ON assignments(room_id, due_date, created_at DESC)`,
-	`CREATE INDEX IF NOT EXISTS idx_submissions_assignment ON submissions(assignment_id, submitted_at DESC)`,
-	`CREATE INDEX IF NOT EXISTS idx_submissions_student ON submissions(student_id, submitted_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_tasks_room_due ON tasks(room_id, due_date, created_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_tasks_room_assignee ON tasks(room_id, assigned_to)`,
+	`CREATE INDEX IF NOT EXISTS idx_task_submissions_task ON task_submissions(task_id, submitted_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_task_submissions_student ON task_submissions(student_id, submitted_at DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_report_links_report ON report_links(report_id, position)`,
-	`CREATE INDEX IF NOT EXISTS idx_submission_links_submission ON submission_links(submission_id, position)`,
+	`CREATE INDEX IF NOT EXISTS idx_task_submission_links_submission ON task_submission_links(submission_id, position)`,
 	`CREATE INDEX IF NOT EXISTS idx_points_ledger_user ON points_ledger(user_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_points_ledger_room_user ON points_ledger(room_id, user_id)`,
 
@@ -249,12 +238,8 @@ var schemaV1 = []string{
 		source_id UNINDEXED, room_id UNINDEXED, assigned_to UNINDEXED,
 		title, detail,
 		tokenize='unicode61 remove_diacritics 2')`,
-	`CREATE VIRTUAL TABLE IF NOT EXISTS assignments_fts USING fts5(
-		source_id UNINDEXED, room_id UNINDEXED,
-		title, instructions,
-		tokenize='unicode61 remove_diacritics 2')`,
-	`CREATE VIRTUAL TABLE IF NOT EXISTS submissions_fts USING fts5(
-		source_id UNINDEXED, assignment_id UNINDEXED, student_id UNINDEXED,
+	`CREATE VIRTUAL TABLE IF NOT EXISTS task_submissions_fts USING fts5(
+		source_id UNINDEXED, task_id UNINDEXED, student_id UNINDEXED,
 		note, feedback,
 		tokenize='unicode61 remove_diacritics 2')`,
 
@@ -298,29 +283,17 @@ var schemaV1 = []string{
 		INSERT INTO tasks_fts(source_id, room_id, assigned_to, title, detail)
 		VALUES (new.id, new.room_id, new.assigned_to, new.title, new.detail);
 	END`,
-	`CREATE TRIGGER IF NOT EXISTS assignments_ai AFTER INSERT ON assignments BEGIN
-		INSERT INTO assignments_fts(source_id, room_id, title, instructions)
-		VALUES (new.id, new.room_id, new.title, new.instructions);
+	`CREATE TRIGGER IF NOT EXISTS task_submissions_ai AFTER INSERT ON task_submissions BEGIN
+		INSERT INTO task_submissions_fts(source_id, task_id, student_id, note, feedback)
+		VALUES (new.id, new.task_id, new.student_id, new.note, new.feedback);
 	END`,
-	`CREATE TRIGGER IF NOT EXISTS assignments_ad AFTER DELETE ON assignments BEGIN
-		DELETE FROM assignments_fts WHERE source_id = old.id;
+	`CREATE TRIGGER IF NOT EXISTS task_submissions_ad AFTER DELETE ON task_submissions BEGIN
+		DELETE FROM task_submissions_fts WHERE source_id = old.id;
 	END`,
-	`CREATE TRIGGER IF NOT EXISTS assignments_au AFTER UPDATE ON assignments BEGIN
-		DELETE FROM assignments_fts WHERE source_id = old.id;
-		INSERT INTO assignments_fts(source_id, room_id, title, instructions)
-		VALUES (new.id, new.room_id, new.title, new.instructions);
-	END`,
-	`CREATE TRIGGER IF NOT EXISTS submissions_ai AFTER INSERT ON submissions BEGIN
-		INSERT INTO submissions_fts(source_id, assignment_id, student_id, note, feedback)
-		VALUES (new.id, new.assignment_id, new.student_id, new.note, new.feedback);
-	END`,
-	`CREATE TRIGGER IF NOT EXISTS submissions_ad AFTER DELETE ON submissions BEGIN
-		DELETE FROM submissions_fts WHERE source_id = old.id;
-	END`,
-	`CREATE TRIGGER IF NOT EXISTS submissions_au AFTER UPDATE ON submissions BEGIN
-		DELETE FROM submissions_fts WHERE source_id = old.id;
-		INSERT INTO submissions_fts(source_id, assignment_id, student_id, note, feedback)
-		VALUES (new.id, new.assignment_id, new.student_id, new.note, new.feedback);
+	`CREATE TRIGGER IF NOT EXISTS task_submissions_au AFTER UPDATE ON task_submissions BEGIN
+		DELETE FROM task_submissions_fts WHERE source_id = old.id;
+		INSERT INTO task_submissions_fts(source_id, task_id, student_id, note, feedback)
+		VALUES (new.id, new.task_id, new.student_id, new.note, new.feedback);
 	END`,
 }
 
@@ -633,9 +606,9 @@ func (s *Store) MenteeDashboard(userID string) (domain.MenteeDashboard, error) {
 	}
 	summary := domain.DashboardSummary{Rooms: len(rooms)}
 	for _, t := range tasks {
-		if t.Status != "done" {
-			summary.OpenTasks++
-		}
+		// menteeDashboardTasks already filters out reviewed submissions,
+		// so every row here counts as an open task.
+		summary.OpenTasks++
 		switch t.DueState {
 		case "due-soon":
 			summary.DueSoonTasks++
@@ -673,9 +646,35 @@ func (s *Store) mentorSummary(userID string, mentees []domain.MenteeProgress) (d
 			WHERE mr.user_id = ? AND mr.role = 'mentor'
 			GROUP BY rp.id HAVING COUNT(c.id) = 0)`},
 		{&out.Blockers, `SELECT COUNT(*) FROM memberships mr JOIN reports rp ON rp.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND rp.blocker != '' AND rp.deleted_at = ''`},
-		{&out.OpenTasks, `SELECT COUNT(*) FROM memberships mr JOIN tasks t ON t.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done' AND t.deleted_at = ''`},
-		{&out.DueSoonTasks, `SELECT COUNT(*) FROM memberships mr JOIN tasks t ON t.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done' AND t.deleted_at = '' AND t.due_date != '' AND t.due_date >= date('now') AND t.due_date <= date('now', '+2 day')`},
-		{&out.OverdueTasks, `SELECT COUNT(*) FROM memberships mr JOIN tasks t ON t.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done' AND t.deleted_at = '' AND t.due_date != '' AND t.due_date < date('now')`},
+		// "Open task" from the mentor's vantage point now means: a task
+		// in their room with at least one student who has not been
+		// reviewed yet (no submission OR submission still in
+		// submitted/revise). LEFT JOIN tracks which student-slot is
+		// unreviewed; we expand the (task × mentee) cartesian and
+		// count the unreviewed combinations.
+		{&out.OpenTasks, `SELECT COUNT(*) FROM memberships mr
+			JOIN tasks t ON t.room_id = mr.room_id AND t.deleted_at = ''
+			JOIN memberships ml ON ml.room_id = t.room_id AND ml.role = 'mentee'
+			  AND (t.assigned_to = '' OR t.assigned_to = ml.user_id)
+			LEFT JOIN task_submissions sub ON sub.task_id = t.id AND sub.student_id = ml.user_id
+			WHERE mr.user_id = ? AND mr.role = 'mentor'
+			  AND (sub.id IS NULL OR sub.status != 'reviewed')`},
+		{&out.DueSoonTasks, `SELECT COUNT(DISTINCT t.id) FROM memberships mr
+			JOIN tasks t ON t.room_id = mr.room_id AND t.deleted_at = ''
+			JOIN memberships ml ON ml.room_id = t.room_id AND ml.role = 'mentee'
+			  AND (t.assigned_to = '' OR t.assigned_to = ml.user_id)
+			LEFT JOIN task_submissions sub ON sub.task_id = t.id AND sub.student_id = ml.user_id
+			WHERE mr.user_id = ? AND mr.role = 'mentor'
+			  AND (sub.id IS NULL OR sub.status != 'reviewed')
+			  AND t.due_date != '' AND t.due_date >= date('now') AND t.due_date <= date('now', '+2 day')`},
+		{&out.OverdueTasks, `SELECT COUNT(DISTINCT t.id) FROM memberships mr
+			JOIN tasks t ON t.room_id = mr.room_id AND t.deleted_at = ''
+			JOIN memberships ml ON ml.room_id = t.room_id AND ml.role = 'mentee'
+			  AND (t.assigned_to = '' OR t.assigned_to = ml.user_id)
+			LEFT JOIN task_submissions sub ON sub.task_id = t.id AND sub.student_id = ml.user_id
+			WHERE mr.user_id = ? AND mr.role = 'mentor'
+			  AND (sub.id IS NULL OR sub.status != 'reviewed')
+			  AND t.due_date != '' AND t.due_date < date('now')`},
 		{&out.ReportsThisWeek, `SELECT COUNT(*) FROM memberships mr JOIN reports rp ON rp.room_id = mr.room_id WHERE mr.user_id = ? AND mr.role = 'mentor' AND rp.deleted_at = '' AND rp.created_at >= datetime('now', '-7 day')`},
 	}
 	for _, q := range queries {
@@ -691,14 +690,20 @@ func (s *Store) mentorSummary(userID string, mentees []domain.MenteeProgress) (d
 	return out, nil
 }
 
+// menteeDashboardTasks returns the open tasks across all rooms for
+// the mentee landing page. "Open" = no submission OR a submission
+// still in submitted/revise state. Reviewed tasks drop off the list.
 func (s *Store) menteeDashboardTasks(userID string) ([]domain.Task, error) {
-	rows, err := s.db.Query(`SELECT t.id, t.title, t.detail, t.status, r.name, t.assigned_to, t.due_date, t.created_at,
-			t.points_awarded, t.reviewed_at, t.reviewed_by
+	rows, err := s.db.Query(`SELECT t.id, t.room_id, t.title, t.detail,
+			t.due_date, t.created_at, COALESCE(sub.status, '')
 		FROM tasks t
-		JOIN rooms r ON r.id = t.room_id
-		WHERE t.assigned_to = ? AND t.status != 'done' AND t.deleted_at = ''
+		JOIN memberships m ON m.room_id = t.room_id AND m.user_id = ? AND m.role = 'mentee'
+		LEFT JOIN task_submissions sub ON sub.task_id = t.id AND sub.student_id = ?
+		WHERE t.deleted_at = ''
+		  AND (t.assigned_to = '' OR t.assigned_to = ?)
+		  AND (sub.id IS NULL OR sub.status != 'reviewed')
 		ORDER BY CASE WHEN t.due_date != '' AND t.due_date < date('now') THEN 0 WHEN t.due_date != '' THEN 1 ELSE 2 END, t.due_date ASC, t.created_at DESC
-		LIMIT 12`, userID)
+		LIMIT 12`, userID, userID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -706,11 +711,11 @@ func (s *Store) menteeDashboardTasks(userID string) ([]domain.Task, error) {
 	var out []domain.Task
 	for rows.Next() {
 		var t domain.Task
-		if err := rows.Scan(&t.ID, &t.Title, &t.Detail, &t.Status, &t.Assignee, &t.AssigneeID, &t.DueDate, &t.CreatedAt,
-			&t.PointsAwarded, &t.ReviewedAt, &t.ReviewedBy); err != nil {
+		if err := rows.Scan(&t.ID, &t.RoomID, &t.Title, &t.Detail,
+			&t.DueDate, &t.CreatedAt, &t.MySubmissionStatus); err != nil {
 			return nil, err
 		}
-		t.DueState = dueState(t.DueDate, t.Status, time.Now().UTC())
+		t.DueState = dueStateFromStatus(t.DueDate, t.MySubmissionStatus, time.Now().UTC())
 		out = append(out, t)
 	}
 	return out, rows.Err()
@@ -818,10 +823,14 @@ func (s *Store) mentorAttention(userID string) ([]domain.AttentionItem, error) {
 	rows, err := s.db.Query(`SELECT 'overdue' AS kind, r.id AS room_id, r.name AS room_name, u.id AS user_id, u.name AS user_name,
 			t.title AS title, t.detail AS detail, t.due_date AS due_date, t.created_at AS sort_at
 		FROM memberships mr
-		JOIN tasks t ON t.room_id = mr.room_id
+		JOIN tasks t ON t.room_id = mr.room_id AND t.deleted_at = '' AND t.due_date != '' AND t.due_date < date('now')
 		JOIN rooms r ON r.id = t.room_id
-		JOIN users u ON u.id = t.assigned_to
-		WHERE mr.user_id = ? AND mr.role = 'mentor' AND t.status != 'done' AND t.deleted_at = '' AND t.due_date != '' AND t.due_date < date('now')
+		JOIN memberships ml ON ml.room_id = t.room_id AND ml.role = 'mentee'
+		  AND (t.assigned_to = '' OR t.assigned_to = ml.user_id)
+		JOIN users u ON u.id = ml.user_id
+		LEFT JOIN task_submissions sub ON sub.task_id = t.id AND sub.student_id = ml.user_id
+		WHERE mr.user_id = ? AND mr.role = 'mentor'
+		  AND (sub.id IS NULL OR sub.status != 'reviewed')
 		UNION ALL
 		SELECT 'blocker', r.id, r.name, u.id, u.name, 'Blocked report', rp.blocker, '', rp.created_at
 		FROM memberships mr
@@ -860,8 +869,17 @@ func (s *Store) menteeProgress(userID string) ([]domain.MenteeProgress, error) {
 	rows, err := s.db.Query(`SELECT u.id, u.name, u.email, r.id, r.name,
 		COALESCE((SELECT MAX(rp.created_at) FROM reports rp WHERE rp.room_id = r.id AND rp.user_id = u.id AND rp.deleted_at = ''), '') AS last_report,
 		(SELECT COUNT(*) FROM reports rp WHERE rp.room_id = r.id AND rp.user_id = u.id AND rp.deleted_at = '' AND rp.created_at >= datetime('now', '-7 day')) AS reports_week,
-		(SELECT COUNT(*) FROM tasks t WHERE t.room_id = r.id AND t.assigned_to = u.id AND t.status != 'done' AND t.deleted_at = '') AS open_tasks,
-		(SELECT COUNT(*) FROM tasks t WHERE t.room_id = r.id AND t.assigned_to = u.id AND t.status != 'done' AND t.deleted_at = '' AND t.due_date != '' AND t.due_date < date('now')) AS overdue_tasks,
+		(SELECT COUNT(*) FROM tasks t
+			LEFT JOIN task_submissions sub ON sub.task_id = t.id AND sub.student_id = u.id
+			WHERE t.room_id = r.id AND t.deleted_at = ''
+			  AND (t.assigned_to = '' OR t.assigned_to = u.id)
+			  AND (sub.id IS NULL OR sub.status != 'reviewed')) AS open_tasks,
+		(SELECT COUNT(*) FROM tasks t
+			LEFT JOIN task_submissions sub ON sub.task_id = t.id AND sub.student_id = u.id
+			WHERE t.room_id = r.id AND t.deleted_at = ''
+			  AND (t.assigned_to = '' OR t.assigned_to = u.id)
+			  AND (sub.id IS NULL OR sub.status != 'reviewed')
+			  AND t.due_date != '' AND t.due_date < date('now')) AS overdue_tasks,
 		(SELECT COUNT(*) FROM reports rp WHERE rp.room_id = r.id AND rp.user_id = u.id AND rp.deleted_at = '' AND rp.blocker != '') AS blockers
 		FROM memberships mr
 		JOIN rooms r ON r.id = mr.room_id
@@ -1080,37 +1098,32 @@ func (s *Store) RoomData(roomID, userID, role string) (domain.RoomData, error) {
 		}
 	}
 	for _, t := range tasks {
-		if t.Status != "done" {
+		// "Open" = not yet reviewed for the viewer. From a mentor's
+		// perspective there's no single viewer-status, so we count
+		// tasks where at least one student is still owed work; from a
+		// mentee's perspective it's their own status.
+		if t.MySubmissionStatus == "" || t.MySubmissionStatus == "submitted" || t.MySubmissionStatus == "revise" {
 			st.OpenTasks++
 		}
-		if t.DueState == "due-soon" {
+		switch t.DueState {
+		case "due-soon":
 			st.DueSoonTasks++
-		}
-		if t.DueState == "overdue" {
+		case "overdue":
 			st.OverdueTasks++
 		}
 	}
-	assignments, err := s.Assignments(roomID, userID, role)
-	if err != nil {
-		return domain.RoomData{}, err
-	}
 	submissions := []domain.Submission{}
+	pending := 0
 	if role == domain.RoleMentor {
-		submissions, err = s.Submissions(roomID)
+		submissions, err = s.TaskSubmissions(roomID)
 		if err != nil {
 			return domain.RoomData{}, err
 		}
-	}
-	pending := 0
-	for _, sub := range submissions {
-		if sub.Status == "submitted" {
-			pending++
+		for _, sub := range submissions {
+			if sub.Status == "submitted" {
+				pending++
+			}
 		}
-	}
-	classroom := domain.ClassroomData{
-		Assignments:    assignments,
-		Submissions:    submissions,
-		PendingReviews: pending,
 	}
 	// Fetch the leaderboard only when it'll actually be rendered: mentors
 	// always see it, mentees only when the mentor has flipped the
@@ -1136,23 +1149,22 @@ func (s *Store) RoomData(roomID, userID, role string) (domain.RoomData, error) {
 			}
 		}
 	} else {
-		// Mentee who can't see the full board still gets their own
-		// score; cheap single-row query.
 		rank, myPoints, err = s.menteeScore(roomID, userID)
 		if err != nil {
 			return domain.RoomData{}, err
 		}
 	}
 	return domain.RoomData{
-		Members:     members,
-		Reports:     reports,
-		Tasks:       tasks,
-		Invites:     invites,
-		Classroom:   classroom,
-		Stats:       st,
-		Leaderboard: board,
-		MyPoints:    myPoints,
-		MyRank:      rank,
+		Members:        members,
+		Reports:        reports,
+		Tasks:          tasks,
+		Invites:        invites,
+		Submissions:    submissions,
+		PendingReviews: pending,
+		Stats:          st,
+		Leaderboard:    board,
+		MyPoints:       myPoints,
+		MyRank:         rank,
 	}, nil
 }
 
@@ -1182,7 +1194,11 @@ func (s *Store) menteeScore(roomID, userID string) (domain.Rank, int, error) {
 func (s *Store) Members(roomID string) ([]domain.Member, error) {
 	rows, err := s.db.Query(`SELECT u.id, u.name, u.email, m.role, m.created_at,
 		COALESCE((SELECT MAX(r.created_at) FROM reports r WHERE r.room_id = m.room_id AND r.user_id = u.id AND r.deleted_at = ''), '') AS last_report,
-		(SELECT COUNT(*) FROM tasks t WHERE t.room_id = m.room_id AND t.assigned_to = u.id AND t.status != 'done' AND t.deleted_at = '') AS open_tasks
+		(SELECT COUNT(*) FROM tasks t
+			LEFT JOIN task_submissions sub ON sub.task_id = t.id AND sub.student_id = u.id
+			WHERE t.room_id = m.room_id AND t.deleted_at = ''
+			  AND (t.assigned_to = '' OR t.assigned_to = u.id)
+			  AND (sub.id IS NULL OR sub.status != 'reviewed')) AS open_tasks
 		FROM memberships m
 		JOIN users u ON u.id = m.user_id
 		WHERE m.room_id = ?
@@ -1410,22 +1426,52 @@ func (s *Store) DeleteComment(commentID string) (bool, error) {
 	return n == 1, nil
 }
 
+// Tasks lists every task in the room, ordered by deadline urgency,
+// with viewer-specific submission state attached when called by a
+// mentee/student. Broadcast tasks (assigned_to='') count as "everyone
+// in the room"; individual tasks (assigned_to=specific user) are only
+// returned to that user or to mentors.
+//
+// The viewer-status fields are computed via a LEFT JOIN on
+// task_submissions filtered to the caller. For mentor/teacher calls
+// they stay empty — mentors use TaskSubmissions() for the review queue
+// instead.
 func (s *Store) Tasks(roomID, userID, role string) ([]domain.Task, error) {
-	query := `SELECT t.id, t.title, t.detail, t.status, u.name, u.id, t.assigned_by, t.due_date, t.created_at, t.edited_at,
-			t.points_awarded, t.reviewed_at, t.reviewed_by
-		FROM tasks t JOIN users u ON u.id = t.assigned_to
-		WHERE t.room_id = ? AND t.deleted_at = ''`
-	args := []any{roomID}
+	totalStudents := 0
+	if role == domain.RoleMentor {
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM memberships WHERE room_id = ? AND role = ?`,
+			roomID, domain.RoleMentee).Scan(&totalStudents); err != nil {
+			return nil, err
+		}
+	}
+
+	query := `SELECT t.id, t.room_id, t.created_by, t.title, t.detail, t.resource_url,
+			t.assigned_to,
+			COALESCE(u.name, '') AS assignee_name,
+			t.due_date, t.created_at, t.edited_at,
+			COALESCE(sub.id, ''), COALESCE(sub.status, ''),
+			COALESCE(sub.feedback, ''), COALESCE(sub.score, ''),
+			COALESCE(sub_counts.submitted, 0) AS submitted
+		FROM tasks t
+		LEFT JOIN users u ON u.id = t.assigned_to
+		LEFT JOIN task_submissions sub ON sub.task_id = t.id AND sub.student_id = ?
+		LEFT JOIN (
+			SELECT task_id, COUNT(*) AS submitted FROM task_submissions GROUP BY task_id
+		) sub_counts ON sub_counts.task_id = t.id
+		WHERE t.room_id = ? AND t.deleted_at = ?`
+	args := []any{userID, roomID, ""}
 	if role != domain.RoleMentor {
-		query += ` AND t.assigned_to = ?`
+		// Mentees see broadcast tasks AND tasks individually assigned
+		// to them; never anyone else's individual task.
+		query += ` AND (t.assigned_to = '' OR t.assigned_to = ?)`
 		args = append(args, userID)
 	}
 	query += ` ORDER BY CASE
-		WHEN t.status = 'done' AND t.reviewed_at = '' THEN 0
-		WHEN t.status != 'done' AND t.due_date != '' AND t.due_date < date('now') THEN 1
-		WHEN t.status != 'done' AND t.due_date != '' THEN 2
-		WHEN t.status = 'todo' THEN 3
-		WHEN t.status = 'doing' THEN 4
+		WHEN COALESCE(sub.status, '') = 'revise' THEN 0
+		WHEN COALESCE(sub.status, '') = '' AND t.due_date != '' AND t.due_date < date('now') THEN 1
+		WHEN COALESCE(sub.status, '') = '' AND t.due_date != '' THEN 2
+		WHEN COALESCE(sub.status, '') = '' THEN 3
+		WHEN sub.status = 'submitted' THEN 4
 		ELSE 5 END, t.due_date ASC, t.created_at DESC`
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -1433,51 +1479,99 @@ func (s *Store) Tasks(roomID, userID, role string) ([]domain.Task, error) {
 	}
 	defer rows.Close()
 	var out []domain.Task
+	var subIDs []string
+	subToTaskIdx := map[string]int{}
 	for rows.Next() {
 		var t domain.Task
-		if err := rows.Scan(&t.ID, &t.Title, &t.Detail, &t.Status, &t.Assignee, &t.AssigneeID, &t.AssignedByID, &t.DueDate, &t.CreatedAt, &t.EditedAt,
-			&t.PointsAwarded, &t.ReviewedAt, &t.ReviewedBy); err != nil {
+		var submissionID string
+		if err := rows.Scan(&t.ID, &t.RoomID, &t.CreatedByID, &t.Title, &t.Detail, &t.ResourceURL,
+			&t.AssigneeID, &t.Assignee, &t.DueDate, &t.CreatedAt, &t.EditedAt,
+			&submissionID, &t.MySubmissionStatus, &t.MyFeedback, &t.MyScore,
+			&t.Submitted); err != nil {
 			return nil, err
 		}
-		t.DueState = dueState(t.DueDate, t.Status, time.Now().UTC())
+		t.TotalStudents = totalStudents
+		t.DueState = dueStateFromStatus(t.DueDate, t.MySubmissionStatus, time.Now().UTC())
+		t.MySubmissionID = submissionID
 		out = append(out, t)
+		if submissionID != "" {
+			subIDs = append(subIDs, submissionID)
+			subToTaskIdx[submissionID] = len(out) - 1
+		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(subIDs) > 0 {
+		groups, err := s.linksByParent("task_submission_links", "submission_id", subIDs)
+		if err != nil {
+			return nil, err
+		}
+		for subID, idx := range subToTaskIdx {
+			out[idx].MySubmissionLinks = groups[subID]
+		}
+	}
+	return out, nil
 }
 
-// TaskRoomAndAssignee returns the (room, assignee) pair for a non-deleted
-// task. Used by edit/delete permission checks at the handler layer.
-func (s *Store) TaskRoomAndAssignee(taskID string) (roomID, assignedTo string, err error) {
-	err = s.db.QueryRow(`SELECT room_id, assigned_to FROM tasks WHERE id = ? AND deleted_at = ''`, taskID).
-		Scan(&roomID, &assignedTo)
-	return
-}
-
-// TaskByID loads a task for the edit form. Returns sql.ErrNoRows if the
-// row is missing, deleted, or already reviewed (since reviewed tasks
-// are no longer editable). Caller still verifies room membership.
-func (s *Store) TaskByID(roomID, taskID string) (domain.Task, error) {
+// TaskByID loads a task plus the viewer's submission summary for the
+// detail page. Returns sql.ErrNoRows when the task is missing or
+// soft-deleted. Caller still verifies room membership.
+func (s *Store) TaskByID(roomID, taskID, viewerID string) (domain.Task, error) {
 	var t domain.Task
-	err := s.db.QueryRow(`SELECT t.id, t.title, t.detail, t.status, u.name, u.id, t.assigned_by, t.due_date, t.created_at, t.edited_at,
-			t.points_awarded, t.reviewed_at, t.reviewed_by
-		FROM tasks t JOIN users u ON u.id = t.assigned_to
-		WHERE t.id = ? AND t.room_id = ? AND t.deleted_at = ''`, taskID, roomID).
-		Scan(&t.ID, &t.Title, &t.Detail, &t.Status, &t.Assignee, &t.AssigneeID, &t.AssignedByID, &t.DueDate, &t.CreatedAt, &t.EditedAt,
-			&t.PointsAwarded, &t.ReviewedAt, &t.ReviewedBy)
+	var submissionID string
+	err := s.db.QueryRow(`SELECT t.id, t.room_id, t.created_by, t.title, t.detail, t.resource_url,
+			t.assigned_to, COALESCE(u.name, ''),
+			t.due_date, t.created_at, t.edited_at,
+			COALESCE(sub.id, ''), COALESCE(sub.status, ''),
+			COALESCE(sub.feedback, ''), COALESCE(sub.score, '')
+		FROM tasks t
+		LEFT JOIN users u ON u.id = t.assigned_to
+		LEFT JOIN task_submissions sub ON sub.task_id = t.id AND sub.student_id = ?
+		WHERE t.id = ? AND t.room_id = ? AND t.deleted_at = ''`, viewerID, taskID, roomID).
+		Scan(&t.ID, &t.RoomID, &t.CreatedByID, &t.Title, &t.Detail, &t.ResourceURL,
+			&t.AssigneeID, &t.Assignee, &t.DueDate, &t.CreatedAt, &t.EditedAt,
+			&submissionID, &t.MySubmissionStatus, &t.MyFeedback, &t.MyScore)
 	if err != nil {
 		return t, err
 	}
-	t.DueState = dueState(t.DueDate, t.Status, time.Now().UTC())
+	t.MySubmissionID = submissionID
+	t.DueState = dueStateFromStatus(t.DueDate, t.MySubmissionStatus, time.Now().UTC())
+	if submissionID != "" {
+		groups, err := s.linksByParent("task_submission_links", "submission_id", []string{submissionID})
+		if err != nil {
+			return t, err
+		}
+		t.MySubmissionLinks = groups[submissionID]
+	}
 	return t, nil
 }
 
-// UpdateTask mutates the editable task fields. reviewed_at = '' guards
-// against editing a task that's already been graded; once points are
-// awarded the content is locked. edited_at stamps the change.
-func (s *Store) UpdateTask(taskID, title, detail, dueDate string) (bool, error) {
-	now := auth.Now()
-	res, err := s.db.Exec(`UPDATE tasks SET title = ?, detail = ?, due_date = ?, edited_at = ?, updated_at = ?
-		WHERE id = ? AND deleted_at = '' AND reviewed_at = ''`, title, detail, dueDate, now, now, taskID)
+// CreateTask inserts a task in either mode. An empty assignedTo means
+// broadcast (every mentee/student in the room can submit). Non-empty
+// must be a mentee membership in the room. resourceURL and detail are
+// optional. Returns the new task ID.
+func (s *Store) CreateTask(roomID, createdBy, assignedTo, title, detail, resourceURL, dueDate string) (string, error) {
+	id, err := auth.NewID()
+	if err != nil {
+		return "", err
+	}
+	if _, err := s.db.Exec(`INSERT INTO tasks(id, room_id, created_by, assigned_to, title, detail, resource_url, due_date, created_at)
+		VALUES(?,?,?,?,?,?,?,?,?)`,
+		id, roomID, createdBy, assignedTo, title, detail, resourceURL, dueDate, auth.Now()); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// UpdateTask edits the four authoring fields on a task. There's no
+// review-lock guard — task content can still be edited after a
+// student has been graded, with the "edited" indicator surfacing the
+// change in the UI.
+func (s *Store) UpdateTask(taskID, title, detail, resourceURL, dueDate string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE tasks SET title = ?, detail = ?, resource_url = ?, due_date = ?, edited_at = ?
+		WHERE id = ? AND deleted_at = ''`,
+		title, detail, resourceURL, dueDate, auth.Now(), taskID)
 	if err != nil {
 		return false, err
 	}
@@ -1485,11 +1579,11 @@ func (s *Store) UpdateTask(taskID, title, detail, dueDate string) (bool, error) 
 	return n == 1, nil
 }
 
-// DeleteTask soft-deletes a task. Once awarded points are present
-// (reviewed_at != '') deletion is rejected so a mentor cannot undo a
-// review by deleting the task and the ledger row in tandem.
+// DeleteTask soft-deletes a task. Submissions stay in the DB but their
+// rows become invisible to every read query (which joins tasks and
+// filters deleted_at). Caller verifies the deleter is a room mentor.
 func (s *Store) DeleteTask(taskID string) (bool, error) {
-	res, err := s.db.Exec(`UPDATE tasks SET deleted_at = ? WHERE id = ? AND deleted_at = '' AND reviewed_at = ''`,
+	res, err := s.db.Exec(`UPDATE tasks SET deleted_at = ? WHERE id = ? AND deleted_at = ''`,
 		auth.Now(), taskID)
 	if err != nil {
 		return false, err
@@ -1498,156 +1592,24 @@ func (s *Store) DeleteTask(taskID string) (bool, error) {
 	return n == 1, nil
 }
 
-func (s *Store) CreateTask(roomID, assignedTo, assignedBy, title, detail, dueDate string) error {
-	id, err := auth.NewID()
-	if err != nil {
-		return err
-	}
-	n := auth.Now()
-	_, err = s.db.Exec(`INSERT INTO tasks(id,room_id,assigned_to,assigned_by,title,detail,status,due_date,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?)`, id, roomID, assignedTo, assignedBy, title, detail, "todo", dueDate, n, n)
-	return err
+// TaskRoom returns the room_id of a non-deleted task. Used by edit /
+// delete permission checks.
+func (s *Store) TaskRoom(taskID string) (string, error) {
+	var roomID string
+	err := s.db.QueryRow(`SELECT room_id FROM tasks WHERE id = ? AND deleted_at = ''`, taskID).Scan(&roomID)
+	return roomID, err
 }
 
-// CreateTaskForMentees inserts one task per current mentee in the room
-// inside a single transaction, so either every mentee gets the task or none
-// do. Returns the number of tasks created (zero if the room has no
-// mentees).
-func (s *Store) CreateTaskForMentees(roomID, assignedBy, title, detail, dueDate string) (int, error) {
-	menteeIDs, err := s.MenteeIDs(roomID)
-	if err != nil {
-		return 0, err
-	}
-	if len(menteeIDs) == 0 {
-		return 0, nil
-	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-	stmt, err := tx.Prepare(`INSERT INTO tasks(id,room_id,assigned_to,assigned_by,title,detail,status,due_date,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?)`)
-	if err != nil {
-		return 0, err
-	}
-	defer stmt.Close()
-	now := auth.Now()
-	for _, menteeID := range menteeIDs {
-		id, err := auth.NewID()
-		if err != nil {
-			return 0, err
-		}
-		if _, err := stmt.Exec(id, roomID, menteeID, assignedBy, title, detail, "todo", dueDate, now, now); err != nil {
-			return 0, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
-	return len(menteeIDs), nil
-}
-
-func (s *Store) UpdateTaskStatus(roomID, taskID, userID, role, status string) (bool, error) {
-	// reviewed_at = '' guard: once a mentor has awarded points, the task is
-	// closed and its status is no longer mutable.
-	res, err := s.db.Exec(`UPDATE tasks SET status = ?, updated_at = ?
-		WHERE id = ? AND room_id = ? AND reviewed_at = '' AND (? = 'mentor' OR assigned_to = ?)`,
-		status, auth.Now(), taskID, roomID, role, userID)
-	if err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	return n == 1, nil
-}
-
-func (s *Store) Assignments(roomID, userID, role string) ([]domain.Assignment, error) {
-	if role == domain.RoleMentor {
-		// total_mentees is the same value for every row in this result
-		// set, so resolve it once instead of running a correlated
-		// subquery per assignment. Submissions count uses a grouped
-		// LEFT JOIN for the same reason.
-		var totalMentees int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM memberships WHERE room_id = ? AND role = ?`,
-			roomID, domain.RoleMentee).Scan(&totalMentees); err != nil {
-			return nil, err
-		}
-		rows, err := s.db.Query(`SELECT a.id, a.room_id, a.title, a.instructions, a.resource_url, a.due_date, a.created_at, a.edited_at,
-				COALESCE(sub.cnt, 0) AS submitted
-			FROM assignments a
-			LEFT JOIN (
-				SELECT assignment_id, COUNT(*) AS cnt
-				FROM submissions
-				GROUP BY assignment_id
-			) sub ON sub.assignment_id = a.id
-			WHERE a.room_id = ? AND a.deleted_at = ''
-			ORDER BY CASE WHEN a.due_date != '' AND a.due_date < date('now') THEN 0 WHEN a.due_date != '' THEN 1 ELSE 2 END, a.due_date ASC, a.created_at DESC`, roomID)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-		var out []domain.Assignment
-		for rows.Next() {
-			var a domain.Assignment
-			if err := rows.Scan(&a.ID, &a.RoomID, &a.Title, &a.Instructions, &a.ResourceURL, &a.DueDate, &a.CreatedAt, &a.EditedAt, &a.Submitted); err != nil {
-				return nil, err
-			}
-			a.TotalMentees = totalMentees
-			out = append(out, a)
-		}
-		return out, rows.Err()
-	}
-	rows, err := s.db.Query(`SELECT a.id, a.room_id, a.title, a.instructions, a.resource_url, a.due_date, a.created_at, a.edited_at,
-		COALESCE(sub.id, ''), COALESCE(sub.status, ''), COALESCE(sub.feedback, ''), COALESCE(sub.score, '')
-		FROM assignments a
-		LEFT JOIN submissions sub ON sub.assignment_id = a.id AND sub.student_id = ?
-		WHERE a.room_id = ? AND a.deleted_at = ''
-		ORDER BY CASE
-			WHEN sub.status = 'revise' THEN 0
-			WHEN sub.status IS NULL AND a.due_date != '' AND a.due_date < date('now') THEN 1
-			WHEN sub.status IS NULL AND a.due_date != '' THEN 2
-			WHEN sub.status IS NULL THEN 3
-			WHEN sub.status = 'submitted' THEN 4
-			ELSE 5 END, a.due_date ASC, a.created_at DESC`, userID, roomID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []domain.Assignment
-	var subIDs []string
-	subIDToAsgnIdx := map[string]int{}
-	for rows.Next() {
-		var a domain.Assignment
-		var submissionID string
-		if err := rows.Scan(&a.ID, &a.RoomID, &a.Title, &a.Instructions, &a.ResourceURL, &a.DueDate, &a.CreatedAt, &a.EditedAt, &submissionID, &a.MySubmissionStatus, &a.MyFeedback, &a.MyScore); err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-		if submissionID != "" {
-			subIDs = append(subIDs, submissionID)
-			subIDToAsgnIdx[submissionID] = len(out) - 1
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	groups, err := s.linksByParent("submission_links", "submission_id", subIDs)
-	if err != nil {
-		return nil, err
-	}
-	for subID, idx := range subIDToAsgnIdx {
-		out[idx].MySubmissionLinks = groups[subID]
-	}
-	return out, nil
-}
-
-func (s *Store) Submissions(roomID string) ([]domain.Submission, error) {
-	rows, err := s.db.Query(`SELECT sub.id, sub.assignment_id, a.title, sub.student_id, u.name, u.email,
-		sub.note, sub.status, sub.feedback, sub.score, sub.submitted_at, sub.reviewed_at
-		FROM submissions sub
-		JOIN assignments a ON a.id = sub.assignment_id
+// TaskSubmissions returns the mentor/teacher review queue for the
+// room. Sorts unreviewed work first. Submission links are attached in
+// one IN(...) round trip.
+func (s *Store) TaskSubmissions(roomID string) ([]domain.Submission, error) {
+	rows, err := s.db.Query(`SELECT sub.id, sub.task_id, t.title, sub.student_id, u.name, u.email,
+			sub.note, sub.status, sub.feedback, sub.score, sub.reviewed_by, sub.submitted_at, sub.reviewed_at
+		FROM task_submissions sub
+		JOIN tasks t ON t.id = sub.task_id
 		JOIN users u ON u.id = sub.student_id
-		WHERE a.room_id = ? AND a.deleted_at = ''
+		WHERE t.room_id = ? AND t.deleted_at = ''
 		ORDER BY CASE sub.status WHEN 'submitted' THEN 0 WHEN 'revise' THEN 1 ELSE 2 END, sub.submitted_at DESC`, roomID)
 	if err != nil {
 		return nil, err
@@ -1656,7 +1618,8 @@ func (s *Store) Submissions(roomID string) ([]domain.Submission, error) {
 	var out []domain.Submission
 	for rows.Next() {
 		var sub domain.Submission
-		if err := rows.Scan(&sub.ID, &sub.AssignmentID, &sub.AssignmentTitle, &sub.StudentID, &sub.StudentName, &sub.StudentEmail, &sub.Note, &sub.Status, &sub.Feedback, &sub.Score, &sub.SubmittedAt, &sub.ReviewedAt); err != nil {
+		if err := rows.Scan(&sub.ID, &sub.TaskID, &sub.TaskTitle, &sub.StudentID, &sub.StudentName, &sub.StudentEmail,
+			&sub.Note, &sub.Status, &sub.Feedback, &sub.Score, &sub.ReviewedBy, &sub.SubmittedAt, &sub.ReviewedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, sub)
@@ -1668,7 +1631,7 @@ func (s *Store) Submissions(roomID string) ([]domain.Submission, error) {
 	for i, sub := range out {
 		ids[i] = sub.ID
 	}
-	groups, err := s.linksByParent("submission_links", "submission_id", ids)
+	groups, err := s.linksByParent("task_submission_links", "submission_id", ids)
 	if err != nil {
 		return nil, err
 	}
@@ -1678,71 +1641,12 @@ func (s *Store) Submissions(roomID string) ([]domain.Submission, error) {
 	return out, nil
 }
 
-// CreateAssignment inserts a classroom assignment and returns its new
-// ID. Caller is responsible for validating dueDate format and ensuring
-// the room is in classroom mode.
-func (s *Store) CreateAssignment(roomID, createdBy, title, instructions, resourceURL, dueDate string) (string, error) {
-	id, err := auth.NewID()
-	if err != nil {
-		return "", err
-	}
-	if _, err := s.db.Exec(`INSERT INTO assignments(id,room_id,created_by,title,instructions,resource_url,due_date,created_at)
-		VALUES(?,?,?,?,?,?,?,?)`, id, roomID, createdBy, title, instructions, resourceURL, dueDate, auth.Now()); err != nil {
-		return "", err
-	}
-	return id, nil
-}
-
-// AssignmentRoom returns the room_id of a non-deleted assignment. Used
-// by edit/delete permission checks. Returns sql.ErrNoRows when the
-// assignment is missing or already deleted.
-func (s *Store) AssignmentRoom(assignmentID string) (string, error) {
-	var roomID string
-	err := s.db.QueryRow(`SELECT room_id FROM assignments WHERE id = ? AND deleted_at = ''`, assignmentID).Scan(&roomID)
-	return roomID, err
-}
-
-// AssignmentByID loads an assignment for the teacher's edit form.
-// Returns sql.ErrNoRows when the row is missing or already deleted.
-func (s *Store) AssignmentByID(roomID, assignmentID string) (domain.Assignment, error) {
-	var a domain.Assignment
-	err := s.db.QueryRow(`SELECT id, room_id, title, instructions, resource_url, due_date, created_at, edited_at
-		FROM assignments WHERE id = ? AND room_id = ? AND deleted_at = ''`, assignmentID, roomID).
-		Scan(&a.ID, &a.RoomID, &a.Title, &a.Instructions, &a.ResourceURL, &a.DueDate, &a.CreatedAt, &a.EditedAt)
-	return a, err
-}
-
-// UpdateAssignment mutates the editable fields. edited_at is stamped so
-// the UI can show "edited <when>". Returns (false, nil) when the
-// assignment is missing or already deleted.
-func (s *Store) UpdateAssignment(assignmentID, title, instructions, resourceURL, dueDate string) (bool, error) {
-	res, err := s.db.Exec(`UPDATE assignments SET title = ?, instructions = ?, resource_url = ?, due_date = ?, edited_at = ?
-		WHERE id = ? AND deleted_at = ''`, title, instructions, resourceURL, dueDate, auth.Now(), assignmentID)
-	if err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	return n == 1, nil
-}
-
-// DeleteAssignment soft-deletes a classroom assignment. Submissions
-// already attached stay in the DB but are hidden from Submissions()
-// since that query joins assignments and now filters deleted_at.
-func (s *Store) DeleteAssignment(assignmentID string) (bool, error) {
-	res, err := s.db.Exec(`UPDATE assignments SET deleted_at = ? WHERE id = ? AND deleted_at = ''`,
-		auth.Now(), assignmentID)
-	if err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	return n == 1, nil
-}
-
-// SubmitAssignment writes (or replaces) the mentee's submission for an
-// assignment. Resubmission clears any prior review state and swaps out
-// the link list — old links are deleted, new links inserted in the same
-// transaction so the row is never half-updated.
-func (s *Store) SubmitAssignment(roomID, assignmentID, studentID, note string, links []domain.Link) error {
+// SubmitTask writes (or replaces) the student's submission to a task.
+// Resubmission clears review state and swaps the link list in one
+// transaction so the row is never half-updated. Caller validates the
+// student is a mentee in this room AND that the task either is
+// broadcast (assigned_to='') or individually assigned to this user.
+func (s *Store) SubmitTask(roomID, taskID, studentID, note string, links []domain.Link) error {
 	if !s.IsMentee(roomID, studentID) {
 		return errors.New("student is not a mentee in this room")
 	}
@@ -1753,19 +1657,24 @@ func (s *Store) SubmitAssignment(roomID, assignmentID, studentID, note string, l
 	defer tx.Rollback()
 	now := auth.Now()
 
-	// Make sure the assignment exists in this room before doing anything.
-	var asgnExists int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM assignments WHERE id = ? AND room_id = ?`, assignmentID, roomID).Scan(&asgnExists); err != nil {
+	// Verify the task lives in this room and is open to this student.
+	var assignedTo string
+	switch err := tx.QueryRow(`SELECT assigned_to FROM tasks
+		WHERE id = ? AND room_id = ? AND deleted_at = ''`, taskID, roomID).Scan(&assignedTo); err {
+	case sql.ErrNoRows:
+		return sql.ErrNoRows
+	case nil:
+		// ok
+	default:
 		return err
 	}
-	if asgnExists != 1 {
-		return sql.ErrNoRows
+	if assignedTo != "" && assignedTo != studentID {
+		return errors.New("task is not assigned to this student")
 	}
 
-	// Find an existing submission ID (if any) so we can delete its links
-	// before inserting the new set. Avoids leaving orphan links on resubmit.
 	var existingID string
-	switch err := tx.QueryRow(`SELECT id FROM submissions WHERE assignment_id = ? AND student_id = ?`, assignmentID, studentID).Scan(&existingID); err {
+	switch err := tx.QueryRow(`SELECT id FROM task_submissions WHERE task_id = ? AND student_id = ?`,
+		taskID, studentID).Scan(&existingID); err {
 	case nil, sql.ErrNoRows:
 	default:
 		return err
@@ -1777,54 +1686,133 @@ func (s *Store) SubmitAssignment(roomID, assignmentID, studentID, note string, l
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`INSERT INTO submissions(id, assignment_id, student_id, note, status, feedback, score, submitted_at, reviewed_at)
-			VALUES(?,?,?,?,'submitted','','',?,'')`, submissionID, assignmentID, studentID, note, now); err != nil {
+		if _, err := tx.Exec(`INSERT INTO task_submissions(id, task_id, student_id, note, status, feedback, score, reviewed_by, submitted_at, reviewed_at)
+			VALUES(?,?,?,?,'submitted','','','',?,'')`,
+			submissionID, taskID, studentID, note, now); err != nil {
 			return err
 		}
 	} else {
-		if _, err := tx.Exec(`UPDATE submissions SET note = ?, status = 'submitted', feedback = '', score = '', submitted_at = ?, reviewed_at = '' WHERE id = ?`,
-			note, now, submissionID); err != nil {
+		if _, err := tx.Exec(`UPDATE task_submissions
+			SET note = ?, status = 'submitted', feedback = '', score = '', reviewed_by = '', submitted_at = ?, reviewed_at = ''
+			WHERE id = ?`, note, now, submissionID); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`DELETE FROM submission_links WHERE submission_id = ?`, submissionID); err != nil {
+		// Clear the old points ledger entry too; if the new submission
+		// gets reviewed again the score may differ. UNIQUE(source,
+		// source_id) would otherwise block re-award.
+		if _, err := tx.Exec(`DELETE FROM points_ledger WHERE source = 'submission' AND source_id = ?`,
+			submissionID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM task_submission_links WHERE submission_id = ?`, submissionID); err != nil {
 			return err
 		}
 	}
-	if err := insertLinksTx(tx, "submission_links", "submission_id", submissionID, links, now); err != nil {
+	if err := insertLinksTx(tx, "task_submission_links", "submission_id", submissionID, links, now); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-// SubmissionContext returns the student_id and assignment title for a
-// submission. Used by web handlers to fan an engagement notification
-// out to the student after a review is posted, without re-querying.
-func (s *Store) SubmissionContext(submissionID string) (studentID, assignmentTitle string, err error) {
-	err = s.db.QueryRow(`SELECT sub.student_id, a.title
-		FROM submissions sub JOIN assignments a ON a.id = sub.assignment_id
-		WHERE sub.id = ?`, submissionID).Scan(&studentID, &assignmentTitle)
+// SubmissionContext returns the student_id, task title, and room_id
+// for a given submission. Used by web handlers to fan engagement
+// notifications without a re-query after the underlying write.
+func (s *Store) SubmissionContext(submissionID string) (studentID, taskTitle, roomID string, err error) {
+	err = s.db.QueryRow(`SELECT sub.student_id, t.title, t.room_id
+		FROM task_submissions sub JOIN tasks t ON t.id = sub.task_id
+		WHERE sub.id = ?`, submissionID).Scan(&studentID, &taskTitle, &roomID)
 	return
 }
 
-// ReviewSubmission writes the teacher's review for a single submission.
+// ReviewTaskSubmission writes the mentor/teacher review for one
+// submission and, in mentorship rooms, records the points award in the
+// ledger so the leaderboard updates atomically.
 //
-// It is idempotent against accidental double-submits: the WHERE clause
-// requires reviewed_at = '', which is only true for submissions in
-// status='submitted'. Once a teacher has reviewed (or asked for a revise),
-// the row is locked from further edits until the student resubmits, which
-// clears reviewed_at again in SubmitAssignment. Re-reviewing returns
-// (false, nil) so the handler can render a 409.
-func (s *Store) ReviewSubmission(roomID, submissionID, status, feedback, score string) (bool, error) {
-	res, err := s.db.Exec(`UPDATE submissions
-		SET status = ?, feedback = ?, score = ?, reviewed_at = ?
-		WHERE id = ? AND reviewed_at = ''
-		  AND assignment_id IN (SELECT id FROM assignments WHERE room_id = ?)`,
-		status, feedback, score, auth.Now(), submissionID, roomID)
+// status must be "reviewed" or "revise". For "reviewed" with a non-
+// empty score in a mentorship room (1–5), a points_ledger row is
+// inserted. classroom rooms keep the score on the submission but
+// don't generate ledger rows — classroom scoring is for gradebook
+// reporting, not the competitive leaderboard.
+//
+// Returns (false, nil) when the submission is missing, already
+// reviewed, or in the wrong room — handler renders a 404/409.
+func (s *Store) ReviewTaskSubmission(roomID, submissionID, status, feedback, score, reviewerID string) (bool, error) {
+	tx, err := s.db.Begin()
 	if err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
-	return n == 1, nil
+	defer tx.Rollback()
+
+	var (
+		studentID string
+		taskID    string
+		roomMode  string
+	)
+	if err := tx.QueryRow(`SELECT sub.student_id, sub.task_id, rm.mode
+		FROM task_submissions sub
+		JOIN tasks t ON t.id = sub.task_id
+		JOIN rooms rm ON rm.id = t.room_id
+		WHERE sub.id = ? AND t.room_id = ? AND sub.reviewed_at = '' AND t.deleted_at = ''`,
+		submissionID, roomID).Scan(&studentID, &taskID, &roomMode); err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+
+	now := auth.Now()
+	if _, err := tx.Exec(`UPDATE task_submissions
+		SET status = ?, feedback = ?, score = ?, reviewed_by = ?, reviewed_at = ?
+		WHERE id = ? AND reviewed_at = ''`,
+		status, feedback, score, reviewerID, now, submissionID); err != nil {
+		return false, err
+	}
+
+	// Mentorship review with a 1–5 score generates a leaderboard entry.
+	if status == "reviewed" && roomMode == domain.RoomModeMentorship && score != "" {
+		points, err := strconv.Atoi(score)
+		if err == nil && points >= 1 && points <= 5 {
+			ledgerID, err := auth.NewID()
+			if err != nil {
+				return false, err
+			}
+			if _, err := tx.Exec(`INSERT INTO points_ledger(id, user_id, room_id, source, source_id, amount, awarded_by, awarded_at)
+				VALUES(?,?,?,?,?,?,?,?)`,
+				ledgerID, studentID, roomID, "submission", submissionID, points, reviewerID, now); err != nil {
+				return false, err
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// dueStateFromStatus is the per-viewer version of dueState. A task
+// whose viewer-submission is already 'reviewed' has no urgency
+// regardless of the deadline; a 'revise' submission goes back to the
+// due-date track.
+func dueStateFromStatus(dueDate, submissionStatus string, now time.Time) string {
+	if submissionStatus == "reviewed" {
+		return ""
+	}
+	if dueDate == "" {
+		return ""
+	}
+	due, err := time.Parse("2006-01-02", dueDate)
+	if err != nil {
+		return ""
+	}
+	today, _ := time.Parse("2006-01-02", now.UTC().Format("2006-01-02"))
+	if due.Before(today) {
+		return "overdue"
+	}
+	if !due.After(today.Add(48 * time.Hour)) {
+		return "due-soon"
+	}
+	return ""
 }
 
 func (s *Store) Invites(roomID string) ([]domain.Invite, error) {
@@ -1848,16 +1836,30 @@ func (s *Store) Invites(roomID string) ([]domain.Invite, error) {
 func (s *Store) DueTaskReminders(now time.Time, window time.Duration) ([]domain.TaskReminder, error) {
 	start := now.UTC().Format("2006-01-02")
 	end := now.UTC().Add(window).Format("2006-01-02")
-	rows, err := s.db.Query(`SELECT t.id, t.title, t.detail, t.due_date, r.id, r.name, u.id, u.name, u.email, u.language
+	// Unified reminder query: every task (individual or broadcast)
+	// that's due within the window, fanned out into one row per
+	// recipient who hasn't yet submitted.
+	//
+	//   - Individually-assigned task: one row for the named assignee
+	//     (unless they've already submitted).
+	//   - Broadcast task (assigned_to=''): one row for every mentee in
+	//     the room who hasn't submitted.
+	//
+	// The dedup grain is per-task-per-day (one round fans all recipients
+	// at once, then the worker stamps last_reminded_at once per task).
+	rows, err := s.db.Query(`SELECT t.id, t.title, t.detail, t.due_date, r.id, r.name, r.mode, u.id, u.name, u.email, u.language
 		FROM tasks t
 		JOIN rooms r ON r.id = t.room_id
-		JOIN users u ON u.id = t.assigned_to
-		WHERE t.status != 'done'
-		  AND t.deleted_at = ''
+		JOIN memberships m ON m.room_id = t.room_id AND m.role = ?
+		JOIN users u ON u.id = m.user_id
+		LEFT JOIN task_submissions sub ON sub.task_id = t.id AND sub.student_id = u.id
+		WHERE t.deleted_at = ''
 		  AND t.due_date != ''
 		  AND t.due_date <= ?
 		  AND (t.last_reminded_at = '' OR t.last_reminded_at < ?)
-		ORDER BY t.due_date ASC`, end, start)
+		  AND (t.assigned_to = '' OR t.assigned_to = u.id)
+		  AND (sub.id IS NULL OR sub.status = 'revise')
+		ORDER BY t.due_date ASC, t.id ASC, u.name ASC`, domain.RoleMentee, end, start)
 	if err != nil {
 		return nil, err
 	}
@@ -1865,7 +1867,8 @@ func (s *Store) DueTaskReminders(now time.Time, window time.Duration) ([]domain.
 	var out []domain.TaskReminder
 	for rows.Next() {
 		var rem domain.TaskReminder
-		if err := rows.Scan(&rem.TaskID, &rem.Title, &rem.Detail, &rem.DueDate, &rem.RoomID, &rem.RoomName, &rem.AssigneeID, &rem.AssigneeName, &rem.AssigneeEmail, &rem.AssigneeLanguage); err != nil {
+		if err := rows.Scan(&rem.TaskID, &rem.Title, &rem.Detail, &rem.DueDate, &rem.RoomID, &rem.RoomName, &rem.RoomMode,
+			&rem.AssigneeID, &rem.AssigneeName, &rem.AssigneeEmail, &rem.AssigneeLanguage); err != nil {
 			return nil, err
 		}
 		out = append(out, rem)
@@ -1875,52 +1878,6 @@ func (s *Store) DueTaskReminders(now time.Time, window time.Duration) ([]domain.
 
 func (s *Store) MarkTaskReminded(taskID string, at time.Time) error {
 	_, err := s.db.Exec(`UPDATE tasks SET last_reminded_at = ? WHERE id = ?`, at.UTC().Format(time.RFC3339), taskID)
-	return err
-}
-
-// DueAssignmentReminders returns one record per (assignment, mentee) pair
-// where the assignment is due within the reminder window, hasn't been
-// reminded today, and the mentee hasn't submitted yet. The worker fans
-// each record out through the notifier registry exactly like a task
-// reminder, then calls MarkAssignmentReminded once per unique
-// AssignmentID to dedup until the next day.
-//
-// The dedup grain is per-assignment-per-day (one round fans out to all
-// unsubmitted mentees at once), not per-(assignment, mentee). That
-// matches the once-per-task-per-day shape used for mentorship tasks and
-// keeps the schema lean — no separate join table for reminder state.
-func (s *Store) DueAssignmentReminders(now time.Time, window time.Duration) ([]domain.AssignmentReminder, error) {
-	start := now.UTC().Format("2006-01-02")
-	end := now.UTC().Add(window).Format("2006-01-02")
-	rows, err := s.db.Query(`SELECT a.id, a.title, a.instructions, a.due_date, r.id, r.name, u.id, u.name, u.email, u.language
-		FROM assignments a
-		JOIN rooms r ON r.id = a.room_id
-		JOIN memberships m ON m.room_id = a.room_id AND m.role = ?
-		JOIN users u ON u.id = m.user_id
-		LEFT JOIN submissions sub ON sub.assignment_id = a.id AND sub.student_id = u.id
-		WHERE sub.id IS NULL
-		  AND a.deleted_at = ''
-		  AND a.due_date != ''
-		  AND a.due_date <= ?
-		  AND (a.last_reminded_at = '' OR a.last_reminded_at < ?)
-		ORDER BY a.due_date ASC, a.id ASC, u.name ASC`, domain.RoleMentee, end, start)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []domain.AssignmentReminder
-	for rows.Next() {
-		var rem domain.AssignmentReminder
-		if err := rows.Scan(&rem.AssignmentID, &rem.Title, &rem.Instructions, &rem.DueDate, &rem.RoomID, &rem.RoomName, &rem.MenteeID, &rem.MenteeName, &rem.MenteeEmail, &rem.MenteeLanguage); err != nil {
-			return nil, err
-		}
-		out = append(out, rem)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) MarkAssignmentReminded(assignmentID string, at time.Time) error {
-	_, err := s.db.Exec(`UPDATE assignments SET last_reminded_at = ? WHERE id = ?`, at.UTC().Format(time.RFC3339), assignmentID)
 	return err
 }
 
@@ -1961,54 +1918,6 @@ func (s *Store) SetNotificationPrefs(prefs domain.NotificationPrefs) error {
 			updated_at=excluded.updated_at`,
 		prefs.UserID, e, prefs.Channel, prefs.WhatsAppNumber, prefs.TelegramChatID, auth.Now())
 	return err
-}
-
-// ReviewTask awards points (1-5) for a completed task. It runs in one
-// transaction: it sets reviewed_at/reviewed_by/points_awarded on the task
-// AND inserts the matching points_ledger row. The ledger row's
-// UNIQUE(source, source_id) constraint guarantees a task can only be awarded
-// once even under racing reviews.
-//
-// Returns (true, nil) when the award was recorded, (false, nil) when the
-// task is not eligible (not done, already reviewed, or not in this room),
-// and (_, err) on storage errors.
-func (s *Store) ReviewTask(roomID, taskID, mentorID string, points int) (bool, error) {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-
-	var assigneeID string
-	err = tx.QueryRow(`SELECT assigned_to FROM tasks
-		WHERE id = ? AND room_id = ? AND status = 'done' AND reviewed_at = ''`, taskID, roomID).Scan(&assigneeID)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-
-	now := auth.Now()
-	if _, err := tx.Exec(`UPDATE tasks SET points_awarded = ?, reviewed_at = ?, reviewed_by = ?, updated_at = ?
-		WHERE id = ? AND room_id = ? AND reviewed_at = ''`,
-		points, now, mentorID, now, taskID, roomID); err != nil {
-		return false, err
-	}
-
-	ledgerID, err := auth.NewID()
-	if err != nil {
-		return false, err
-	}
-	if _, err := tx.Exec(`INSERT INTO points_ledger(id, user_id, room_id, source, source_id, amount, awarded_by, awarded_at)
-		VALUES(?,?,?,?,?,?,?,?)`,
-		ledgerID, assigneeID, roomID, "task", taskID, points, mentorID, now); err != nil {
-		return false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 // UserPointsTotal sums all points the user has ever earned, across rooms.
@@ -2130,7 +2039,8 @@ func (s *Store) Search(userID, query string, limit int) ([]domain.SearchHit, err
 		  AND c.deleted_at = ''
 		  AND r.deleted_at = ''
 		UNION ALL
-		-- Tasks
+		-- Tasks: visible to room mentors; mentees only see broadcast
+		-- tasks or ones individually assigned to them.
 		SELECT 'task', t.id, t.room_id, rm.name, rm.mode,
 			COALESCE(u.name, ''), t.title,
 			snippet(tasks_fts, -1, char(2), char(3), '…', 24),
@@ -2138,38 +2048,25 @@ func (s *Store) Search(userID, query string, limit int) ([]domain.SearchHit, err
 		FROM tasks_fts
 		JOIN tasks t ON t.id = tasks_fts.source_id
 		JOIN rooms rm ON rm.id = t.room_id
-		JOIN users u ON u.id = t.assigned_to
+		LEFT JOIN users u ON u.id = t.assigned_to
 		JOIN memberships m ON m.room_id = t.room_id AND m.user_id = ?
 		WHERE tasks_fts MATCH ?
 		  AND t.deleted_at = ''
-		  AND (m.role = 'mentor' OR t.assigned_to = ?)
-		UNION ALL
-		-- Assignments
-		SELECT 'assignment', a.id, a.room_id, rm.name, rm.mode,
-			'', a.title,
-			snippet(assignments_fts, -1, char(2), char(3), '…', 24),
-			a.created_at, bm25(assignments_fts)
-		FROM assignments_fts
-		JOIN assignments a ON a.id = assignments_fts.source_id
-		JOIN rooms rm ON rm.id = a.room_id
-		JOIN memberships m ON m.room_id = a.room_id AND m.user_id = ?
-		WHERE assignments_fts MATCH ?
-		  AND a.deleted_at = ''
-		  AND rm.mode = 'classroom'
+		  AND (m.role = 'mentor' OR t.assigned_to = '' OR t.assigned_to = ?)
 		UNION ALL
 		-- Submissions
 		SELECT 'submission', sub.id, rm.id, rm.name, rm.mode,
-			COALESCE(u.name, ''), a.title,
-			snippet(submissions_fts, -1, char(2), char(3), '…', 24),
-			sub.submitted_at, bm25(submissions_fts)
-		FROM submissions_fts
-		JOIN submissions sub ON sub.id = submissions_fts.source_id
-		JOIN assignments a ON a.id = sub.assignment_id
-		JOIN rooms rm ON rm.id = a.room_id
+			COALESCE(u.name, ''), t.title,
+			snippet(task_submissions_fts, -1, char(2), char(3), '…', 24),
+			sub.submitted_at, bm25(task_submissions_fts)
+		FROM task_submissions_fts
+		JOIN task_submissions sub ON sub.id = task_submissions_fts.source_id
+		JOIN tasks t ON t.id = sub.task_id
+		JOIN rooms rm ON rm.id = t.room_id
 		JOIN users u ON u.id = sub.student_id
-		JOIN memberships m ON m.room_id = a.room_id AND m.user_id = ?
-		WHERE submissions_fts MATCH ?
-		  AND a.deleted_at = ''
+		JOIN memberships m ON m.room_id = t.room_id AND m.user_id = ?
+		WHERE task_submissions_fts MATCH ?
+		  AND t.deleted_at = ''
 		  AND (m.role = 'mentor' OR sub.student_id = ?)
 		ORDER BY rk
 		LIMIT ?`
@@ -2177,7 +2074,6 @@ func (s *Store) Search(userID, query string, limit int) ([]domain.SearchHit, err
 		userID, q, userID,
 		userID, q,
 		userID, q, userID,
-		userID, q,
 		userID, q, userID,
 		limit)
 	if err != nil {
@@ -2205,16 +2101,14 @@ func searchDeepLink(h domain.SearchHit) string {
 	case "report":
 		return "/rooms/" + h.RoomID + "/reports/" + h.ID
 	case "comment":
-		// comments live on a report — caller knows roomID; we used
-		// h.ID for the comment id, but the SQL above puts the
-		// comment's id in ID. We don't store the report id on the
-		// hit struct since the link goes back to the room view as a
-		// reasonable approximation. A future iteration can fan out
-		// to the exact report.
+		// Comments link back to the room — the report id isn't
+		// available on the SearchHit row. Good enough for v1.
 		return "/rooms/" + h.RoomID
-	case "task", "submission":
-		return "/rooms/" + h.RoomID
-	case "assignment":
+	case "task":
+		return "/rooms/" + h.RoomID + "/tasks/" + h.ID
+	case "submission":
+		// Submissions don't have a standalone page; the mentor/teacher
+		// review queue is on the room page.
 		return "/rooms/" + h.RoomID
 	}
 	return "/rooms/" + h.RoomID
@@ -2271,13 +2165,13 @@ func (s *Store) CoachMetrics(userID string, windowDays int) (domain.CoachMetrics
 		return m, err
 	}
 
-	// % of submissions reviewed in classrooms this mentor leads.
+	// % of task submissions reviewed in rooms this mentor leads.
 	q2 := `SELECT
 			SUM(CASE WHEN sub.reviewed_at != '' THEN 1 ELSE 0 END) AS reviewed,
 			COUNT(*) AS total
-		FROM submissions sub
-		JOIN assignments a ON a.id = sub.assignment_id AND a.deleted_at = ''
-		JOIN memberships m ON m.room_id = a.room_id AND m.user_id = ? AND m.role = 'mentor'`
+		FROM task_submissions sub
+		JOIN tasks t ON t.id = sub.task_id AND t.deleted_at = ''
+		JOIN memberships m ON m.room_id = t.room_id AND m.user_id = ? AND m.role = 'mentor'`
 	args2 := []any{userID}
 	if windowStart != "" {
 		q2 += ` WHERE sub.submitted_at >= ?`
@@ -2322,9 +2216,7 @@ func (s *Store) CoachMetrics(userID string, windowDays int) (domain.CoachMetrics
 			SELECT ml.user_id, MAX(activity) AS last_activity FROM (
 				SELECT rp.user_id, rp.created_at AS activity FROM reports rp WHERE rp.deleted_at = ''
 				UNION ALL
-				SELECT t.assigned_to, t.updated_at FROM tasks t WHERE t.deleted_at = ''
-				UNION ALL
-				SELECT sub.student_id, sub.submitted_at FROM submissions sub
+				SELECT sub.student_id, sub.submitted_at FROM task_submissions sub
 			) ml GROUP BY ml.user_id
 		) lr
 		JOIN memberships mm ON mm.user_id = lr.user_id AND mm.role = 'mentee'
@@ -2522,25 +2414,28 @@ func topTopics(freq map[string]int, n int) []domain.TopicCount {
 }
 
 // StudentGrades returns one GradeRoom per classroom the user is enrolled
-// in as a mentee, each containing every assignment in that room with
-// the student's submission state. Used by /me/grades.
+// in as a mentee, each containing every task in that room with the
+// student's submission state. Used by /me/grades. Only classroom rooms
+// are included — mentorship awards 1–5 points on the leaderboard and
+// is intentionally out of scope for the gradebook view.
 //
-// Status is derived per assignment:
+// Status is derived per task:
 //   - "missing"  — no submission and the deadline has passed
 //   - "—"        — no submission, deadline not yet passed
 //   - "late"     — submitted after the deadline, awaiting review
 //   - "submitted"/ "revise" — submission status as-is
 //   - "reviewed" — submission has been reviewed
 func (s *Store) StudentGrades(userID string) ([]domain.GradeRoom, error) {
-	rows, err := s.db.Query(`SELECT rm.id, rm.name, a.id, a.title, a.due_date,
+	rows, err := s.db.Query(`SELECT rm.id, rm.name, t.id, t.title, t.due_date,
 			COALESCE(sub.status, ''), COALESCE(sub.score, ''),
 			COALESCE(sub.feedback, ''), COALESCE(sub.submitted_at, '')
 		FROM memberships m
 		JOIN rooms rm ON rm.id = m.room_id AND rm.mode = 'classroom'
-		JOIN assignments a ON a.room_id = rm.id AND a.deleted_at = ''
-		LEFT JOIN submissions sub ON sub.assignment_id = a.id AND sub.student_id = ?
+		JOIN tasks t ON t.room_id = rm.id AND t.deleted_at = ''
+		  AND (t.assigned_to = '' OR t.assigned_to = ?)
+		LEFT JOIN task_submissions sub ON sub.task_id = t.id AND sub.student_id = ?
 		WHERE m.user_id = ? AND m.role = 'mentee'
-		ORDER BY rm.name, a.due_date DESC, a.created_at DESC`, userID, userID)
+		ORDER BY rm.name, t.due_date DESC, t.created_at DESC`, userID, userID, userID)
 	if err != nil {
 		return nil, err
 	}

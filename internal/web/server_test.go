@@ -203,32 +203,33 @@ func (h *classroomHarness) post(path string, cookies []*http.Cookie, form url.Va
 	return rr
 }
 
-func TestClassroomAssignmentFlowEnforcesRoleAndMode(t *testing.T) {
+func TestClassroomTaskFlowEnforcesRoleAndMode(t *testing.T) {
 	h := newClassroomHarness(t)
 
-	// Mentee cannot create an assignment.
-	bad := h.post("/rooms/"+h.roomID+"/assignments", h.menteeCookies, url.Values{
-		"csrf":         {h.menteeCSRF},
-		"title":        {"Mentee-published"},
-		"instructions": {"should fail"},
-		"due_date":     {"2026-12-01"},
+	// Mentee cannot create a task.
+	bad := h.post("/rooms/"+h.roomID+"/tasks", h.menteeCookies, url.Values{
+		"csrf":     {h.menteeCSRF},
+		"title":    {"Mentee-published"},
+		"detail":   {"should fail"},
+		"due_date": {"2026-12-01"},
 	})
 	if bad.Code != http.StatusForbidden {
-		t.Fatalf("mentee publishing assignment: want 403, got %d", bad.Code)
+		t.Fatalf("mentee publishing task: want 403, got %d", bad.Code)
 	}
 
-	// Mentor publishes a valid assignment.
-	createRR := h.post("/rooms/"+h.roomID+"/assignments", h.mentorCookies, url.Values{
-		"csrf":         {h.mentorCSRF},
-		"title":        {"Build a small notebook"},
-		"instructions": {"Train a baseline model"},
-		"due_date":     {"2026-12-01"},
+	// Mentor publishes a valid task (classroom auto-broadcasts).
+	createRR := h.post("/rooms/"+h.roomID+"/tasks", h.mentorCookies, url.Values{
+		"csrf":     {h.mentorCSRF},
+		"title":    {"Build a small notebook"},
+		"detail":   {"Train a baseline model"},
+		"due_date": {"2026-12-01"},
 	})
 	if createRR.Code != http.StatusSeeOther {
-		t.Fatalf("mentor create assignment: want 303, got %d body=%s", createRR.Code, createRR.Body.String())
+		t.Fatalf("mentor create task: want 303, got %d body=%s", createRR.Code, createRR.Body.String())
 	}
 
-	// Mentor cannot submit (wrong role).
+	// Pull the task ID from the mentee's task list (each card links to
+	// /rooms/{id}/tasks/{taskID}).
 	roomBody := func(cookies []*http.Cookie) string {
 		req := httptest.NewRequest(http.MethodGet, "/rooms/"+h.roomID, nil)
 		for _, c := range cookies {
@@ -239,20 +240,20 @@ func TestClassroomAssignmentFlowEnforcesRoleAndMode(t *testing.T) {
 		return rr.Body.String()
 	}
 	body := roomBody(h.menteeCookies)
-	// Pull the assignment ID from the mentee's submission form action.
-	prefix := "/rooms/" + h.roomID + "/assignments/"
+	prefix := "/rooms/" + h.roomID + "/tasks/"
 	start := strings.Index(body, prefix)
 	if start < 0 {
-		t.Fatal("could not find assignment submission form in mentee room body")
+		t.Fatal("could not find task detail link in mentee room body")
 	}
 	tail := body[start+len(prefix):]
-	end := strings.Index(tail, "/submissions")
+	end := strings.IndexAny(tail, `"/`)
 	if end < 0 {
-		t.Fatal("malformed submission form action")
+		t.Fatal("malformed task detail link")
 	}
-	assignmentID := tail[:end]
+	taskID := tail[:end]
 
-	mentorSubmit := h.post("/rooms/"+h.roomID+"/assignments/"+assignmentID+"/submissions", h.mentorCookies, url.Values{
+	// Mentor cannot submit (wrong role).
+	mentorSubmit := h.post("/rooms/"+h.roomID+"/tasks/"+taskID+"/submit", h.mentorCookies, url.Values{
 		"csrf":     {h.mentorCSRF},
 		"link_url": {"https://example.com/work"},
 	})
@@ -261,7 +262,7 @@ func TestClassroomAssignmentFlowEnforcesRoleAndMode(t *testing.T) {
 	}
 
 	// Mentee submits with a bad URL → 400.
-	badURL := h.post("/rooms/"+h.roomID+"/assignments/"+assignmentID+"/submissions", h.menteeCookies, url.Values{
+	badURL := h.post("/rooms/"+h.roomID+"/tasks/"+taskID+"/submit", h.menteeCookies, url.Values{
 		"csrf":     {h.menteeCSRF},
 		"link_url": {"javascript:alert(1)"},
 	})
@@ -270,7 +271,7 @@ func TestClassroomAssignmentFlowEnforcesRoleAndMode(t *testing.T) {
 	}
 
 	// Mentee submits properly.
-	goodSubmit := h.post("/rooms/"+h.roomID+"/assignments/"+assignmentID+"/submissions", h.menteeCookies, url.Values{
+	goodSubmit := h.post("/rooms/"+h.roomID+"/tasks/"+taskID+"/submit", h.menteeCookies, url.Values{
 		"csrf":     {h.menteeCSRF},
 		"link_url": {"https://docs.google.com/work"},
 		"note":     {"first pass"},
@@ -279,7 +280,7 @@ func TestClassroomAssignmentFlowEnforcesRoleAndMode(t *testing.T) {
 		t.Fatalf("mentee submit: want 303, got %d body=%s", goodSubmit.Code, goodSubmit.Body.String())
 	}
 
-	// Find submission ID from mentor's room view (status 'submitted' card).
+	// Find submission ID from mentor's room view (review queue).
 	mBody := roomBody(h.mentorCookies)
 	subPrefix := "/rooms/" + h.roomID + "/submissions/"
 	subStart := strings.Index(mBody, subPrefix)
@@ -324,7 +325,7 @@ func TestClassroomAssignmentFlowEnforcesRoleAndMode(t *testing.T) {
 		t.Fatalf("mentor revise empty feedback: want 400, got %d", noFeedback.Code)
 	}
 
-	// Mentor reviews successfully.
+	// Mentor reviews successfully (classroom: 0-100 score).
 	reviewOK := h.post("/rooms/"+h.roomID+"/submissions/"+submissionID+"/review", h.mentorCookies, url.Values{
 		"csrf":     {h.mentorCSRF},
 		"status":   {"reviewed"},
@@ -347,58 +348,27 @@ func TestClassroomAssignmentFlowEnforcesRoleAndMode(t *testing.T) {
 	}
 }
 
-func TestClassroomRoutesRejectMentorshipMode(t *testing.T) {
-	// Setup mentor + mentorship room (the default), then make sure
-	// classroom mutators reject it even with the right role.
-	srv := newTestServer(t)
-	h := srv.Handler()
-	post := func(path string, cookies []*http.Cookie, form url.Values) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		for _, c := range cookies {
-			req.AddCookie(c)
-		}
-		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, req)
-		return rr
-	}
-	get := func(path string, cookies []*http.Cookie) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		for _, c := range cookies {
-			req.AddCookie(c)
-		}
-		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, req)
-		return rr
-	}
-	between := func(body, start, end string) string {
-		i := strings.Index(body, start)
-		if i < 0 {
-			t.Fatalf("could not find %q", start)
-		}
-		rest := body[i+len(start):]
-		j := strings.Index(rest, end)
-		if j < 0 {
-			t.Fatalf("could not find %q after %q", end, start)
-		}
-		return rest[:j]
-	}
-	rr := post("/setup", nil, url.Values{
-		"name":     {"Mentor"},
-		"email":    {"mentor@example.com"},
-		"password": {"verysecurepass123"},
+// TestClassroomTaskCreateRequiresDetailAndDeadline — in classroom mode,
+// instructions (detail) and deadline are gradebook-material defaults, so
+// the unified /tasks endpoint must reject creates that omit either.
+// Mentorship mode keeps both optional.
+func TestClassroomTaskCreateRequiresDetailAndDeadline(t *testing.T) {
+	h := newClassroomHarness(t)
+	missingDetail := h.post("/rooms/"+h.roomID+"/tasks", h.mentorCookies, url.Values{
+		"csrf":     {h.mentorCSRF},
+		"title":    {"x"},
+		"due_date": {"2026-12-01"},
 	})
-	cookies := rr.Result().Cookies()
-	csrf := between(get("/", cookies).Body.String(), `name="csrf" value="`, `"`)
-	// Default mode: mentorship.
-	roomRR := post("/rooms", cookies, url.Values{"csrf": {csrf}, "name": {"Backend"}})
-	roomID := strings.TrimPrefix(roomRR.Result().Header.Get("Location"), "/rooms/")
-
-	createAssignment := post("/rooms/"+roomID+"/assignments", cookies, url.Values{
-		"csrf": {csrf}, "title": {"x"}, "instructions": {"x"}, "due_date": {"2026-12-01"},
+	if missingDetail.Code != http.StatusBadRequest {
+		t.Fatalf("classroom create without detail: want 400, got %d", missingDetail.Code)
+	}
+	missingDue := h.post("/rooms/"+h.roomID+"/tasks", h.mentorCookies, url.Values{
+		"csrf":   {h.mentorCSRF},
+		"title":  {"x"},
+		"detail": {"y"},
 	})
-	if createAssignment.Code != http.StatusForbidden {
-		t.Fatalf("createAssignment in mentorship room: want 403, got %d", createAssignment.Code)
+	if missingDue.Code != http.StatusBadRequest {
+		t.Fatalf("classroom create without due_date: want 400, got %d", missingDue.Code)
 	}
 }
 

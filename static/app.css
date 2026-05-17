@@ -19,6 +19,15 @@ h1{font-size:30px;line-height:1.15;margin:0 0 16px}h2{font-size:18px;line-height
 .dashboard-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(340px,.85fr);gap:18px;margin-bottom:18px}.mentor-room-grid{grid-template-columns:minmax(0,1.25fr) minmax(340px,.75fr)}.mentor-tools{display:grid;grid-template-columns:minmax(260px,.8fr) minmax(320px,1.2fr);gap:16px;margin-bottom:16px}
 .stack{display:grid;gap:12px}.inline{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 label{display:grid;gap:6px;font-weight:700}input,textarea,select{width:100%;border:1px solid var(--line);border-radius:6px;padding:10px 11px;font:inherit;background:#fff;color:var(--text)}textarea{min-height:92px;resize:vertical}
+/* Replace the native OS chevron with a CSS-only one. `appearance:none`
+   strips the default look so we can paint our own; the chevron itself
+   is an inline SVG data URI in `background-image` (CSP `style-src
+   'self'` covers external sheet origins, not data URIs in CSS values,
+   so this stays compliant). Keeps the select visually consistent with
+   inputs and text fields across browsers. */
+select{-webkit-appearance:none;-moz-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23427569' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:12px 8px;padding-right:34px;cursor:pointer}
+select:hover{border-color:var(--accent)}
+select:disabled{background-color:#f5f5f5;cursor:not-allowed;opacity:.7}
 input:focus,textarea:focus,select:focus{outline:3px solid rgba(23,107,82,.16);border-color:var(--accent)}button{border:0;border-radius:6px;background:var(--accent);color:white;padding:10px 14px;font:inherit;font-weight:750;cursor:pointer}button:hover{background:var(--accent-strong)}.link{background:transparent;color:var(--accent);padding:0}.link:hover{background:transparent;text-decoration:underline}
 .alert{border:1px solid #b7dfcf;background:#edf8f3;padding:10px 12px;border-radius:8px}.error{border-color:#f3b0a9;background:#fff1f0;color:var(--danger)}
 .muted{color:var(--muted);margin-top:0}.pill,.status{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:3px 9px;color:var(--muted);font-size:12px;font-weight:750;align-items:center;white-space:nowrap}.status.todo{background:#f3f5f8}.status.doing{background:#fff7e8;color:var(--warn);border-color:#f0d7ad}.status.done{background:#edf8f3;color:var(--accent);border-color:#b7dfcf}.status.attention{background:#fff1f0;color:var(--danger);border-color:#f3b0a9}.mode-pill{background:#eef4f1;color:var(--accent);border-color:#b7dfcf}.status.submitted{background:#fff7e8;color:var(--warn);border-color:#f0d7ad}.status.reviewed{background:#edf8f3;color:var(--accent);border-color:#b7dfcf}.status.revise{background:#fff1f0;color:var(--danger);border-color:#f3b0a9}
@@ -174,6 +183,23 @@ form.inline input[type="text"],form.inline input:not([type]){width:auto}
 .comment-edit summary{cursor:pointer;color:var(--accent);font-size:13px;font-weight:700}
 .comment-edit textarea{margin-top:6px;width:100%}
 .form-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+
+/* Inline copy buttons (invite code, join URL). Live next to the
+   <code> they're tied to. JS toggles the .copied class for 1.5s so
+   the user sees the action took. */
+.copy-btn{margin-left:8px;background:transparent;color:var(--accent);border:1px solid var(--accent);border-radius:6px;padding:2px 10px;font:inherit;font-size:13px;font-weight:700;cursor:pointer;vertical-align:middle}
+.copy-btn:hover{background:rgba(23,107,82,.08)}
+.copy-btn.copied{background:var(--accent);color:#fff}
+
+/* Per-form intro paragraph — gives the user context about why this
+   form exists before they start typing. Sits between the section
+   header and the form body. */
+.form-intro{margin:0 0 14px;font-size:14px;line-height:1.5;max-width:60ch}
+
+/* Invite panel help text — fills the empty space below the short
+   inline form with a one-line policy reminder so the panel doesn't
+   look broken. */
+.invite-help{margin:12px 0 0;font-size:13px;line-height:1.5;max-width:60ch}
 
 /* Topbar search box. Sits next to the user chip; collapses below the
    nav line at narrow widths. */

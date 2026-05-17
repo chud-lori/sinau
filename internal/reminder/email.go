@@ -61,20 +61,6 @@ func (e *EmailNotifier) NotifyTaskDue(ctx context.Context, to Recipient, rem dom
 	return e.send(ctx, to.Email, subject, body)
 }
 
-func (e *EmailNotifier) NotifyAssignmentDue(ctx context.Context, to Recipient, rem domain.AssignmentReminder) error {
-	if !e.Configured() {
-		log.Printf("email notifier not configured (SINAU_SMTP_HOST/From unset); routing to fallback")
-		return e.fallback.NotifyAssignmentDue(ctx, to, rem)
-	}
-	if to.Email == "" {
-		return fmt.Errorf("recipient %s has no email address", to.UserID)
-	}
-	lang := recipientLang(to)
-	subject := i18n.Tf(lang, "notif.assignment_due.subject", rem.Title, rem.DueDate)
-	body := buildAssignmentBody(lang, to, rem)
-	return e.send(ctx, to.Email, subject, body)
-}
-
 func recipientLang(to Recipient) i18n.Lang {
 	lang := i18n.Lang(to.Language)
 	if !i18n.IsValid(lang) {
@@ -91,17 +77,6 @@ func buildTaskBody(lang i18n.Lang, to Recipient, rem domain.TaskReminder) string
 		fmt.Fprintf(&b, "%s\n%s\n\n", i18n.T(lang, "notif.task_due.details"), rem.Detail)
 	}
 	fmt.Fprintf(&b, "%s\n\n%s\n", i18n.T(lang, "notif.task_due.footer"), i18n.T(lang, "notif.task_due.signature"))
-	return b.String()
-}
-
-func buildAssignmentBody(lang i18n.Lang, to Recipient, rem domain.AssignmentReminder) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n", i18n.Tf(lang, "notif.assignment_due.greeting", to.Name))
-	fmt.Fprintf(&b, "%s\n\n", i18n.Tf(lang, "notif.assignment_due.body", rem.Title, rem.RoomName, rem.DueDate))
-	if rem.Instructions != "" {
-		fmt.Fprintf(&b, "%s\n%s\n\n", i18n.T(lang, "notif.assignment_due.instructions"), rem.Instructions)
-	}
-	fmt.Fprintf(&b, "%s\n\n%s\n", i18n.T(lang, "notif.assignment_due.footer"), i18n.T(lang, "notif.task_due.signature"))
 	return b.String()
 }
 

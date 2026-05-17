@@ -87,6 +87,14 @@ elsewhere on the instance.
 - **Account self-service** at `/profile` — change name, email, language,
   password (revokes other sessions), and see / sign out other active
   sessions.
+- **First-run onboarding** — new users land on a one-screen explainer
+  with role-aware paths instead of an empty dashboard. Always skippable.
+- **Search** — full-text search across every report, comment, task,
+  assignment, and submission you can see, scoped automatically by room
+  membership. Highlighted snippets, live-as-you-type via htmx.
+- **Personal views** — `/me/growth` (your check-in rhythm, streak, task
+  completion, recurring topics), `/me/grades` (every classroom in one
+  place), `/me/coaching` (private self-metrics for mentors / teachers).
 - **Per-user notification settings** at `/settings`
 - **In-app help** at `/help` for both mentors/teachers and mentees/students
 
@@ -106,8 +114,11 @@ Sinau is a single Go binary with a SQLite file behind it. To poke at it
 locally:
 
 ```sh
-go run ./cmd/sinau
+make run
 ```
+
+(The `Makefile` sets the `sqlite_fts5` build tag the search feature
+needs. If you call `go run` directly, pass `-tags sqlite_fts5`.)
 
 Then open `http://127.0.0.1:8080`. The first time you load it, you'll be
 asked to create the bootstrap account.

@@ -33,7 +33,7 @@ database process, no container required.
 | `internal/store`    | SQLite migrations + every SQL query in the app. The only package that imports `database/sql`. |
 | `internal/web`      | HTTP routes, middleware (CSRF, rate limit, auth, security headers), handlers, template rendering. |
 | `internal/reminder` | `Notifier` interface, channel implementations (log, email, whatsapp stub, telegram stub), the `Worker` loop. |
-| `templates/app.html`| Single file holding every server-rendered view as named templates (`landing`, `login`, `join`, `setup`, `mentor_home`, `mentee_home`, `room`, `report`, `report_edit`, `task_edit`, `assignment_edit`, `profile`, `settings`, `help`, `invite_created`, `link_row`, `lang_picker`). |
+| `templates/app.html`| Single file holding every server-rendered view as named templates (`landing`, `login`, `join`, `setup`, `mentor_home`, `mentee_home`, `room`, `report`, `report_edit`, `task_edit`, `assignment_edit`, `profile`, `settings`, `help`, `onboarding`, `search`, `search_results`, `coaching`, `growth`, `grades`, `invite_created`, `link_row`, `lang_picker`). |
 | `static/`           | CSS (hand-rolled, design tokens), vendored htmx, SVG favicon. |
 
 ## Data model
@@ -52,7 +52,7 @@ rooms ─< assignments ─< submissions
 
 Key tables:
 
-- **users** — account, password hash, `can_create_rooms`, `language`, `engagement_notif_enabled` (per-user opt-out for non-deadline notifications).
+- **users** — account, password hash, `can_create_rooms`, `language`, `engagement_notif_enabled` (per-user opt-out for non-deadline notifications), `onboarded_at` (set on first dashboard visit — empty for fresh accounts so `/onboarding` can intercept the home redirect).
 - **sessions** — `id_hash` is sha256(token); the raw token lives only in the cookie. `created_at` exposed in the /profile sessions section.
 - **rooms** — `mode` (`mentorship` | `classroom`), `leaderboard_visible`.
 - **memberships** — `(room_id, user_id)` PK, `role` (`mentor` | `mentee`).
@@ -150,6 +150,42 @@ Two dispatch paths, one notifier registry:
 - Two opt-out levels: `notification_prefs.enabled` controls the whole channel (and is the master gate for deadline reminders); `users.engagement_notif_enabled` lets a user keep deadline reminders while silencing engagement pings. Both must be on for an engagement notification to fire.
 - Master switch: `SINAU_NOTIFICATIONS_ENABLED=false` hides the `/settings` UI, the topbar link, the `/help` section, skips starting the worker, AND skips building the engagement dispatcher.
 
+## Search (FTS5)
+
+Five FTS5 virtual tables — one per searchable resource — backed by
+triggers that keep the index in lock-step with the source table:
+
+```
+reports        ──AI/AU/AD──> reports_fts
+comments       ──AI/AU/AD──> comments_fts
+tasks          ──AI/AU/AD──> tasks_fts
+assignments    ──AI/AU/AD──> assignments_fts
+submissions    ──AI/AU/AD──> submissions_fts
+```
+
+Design notes:
+
+- Each FTS table stores the source row's TEXT id as an UNINDEXED
+  `source_id` column so search hits can be joined back to the real row.
+  (FTS5's `content_rowid` requires an INTEGER rowid, which Sinau's
+  hex-string IDs aren't.)
+- Soft-delete is a column update (`deleted_at`), not a DELETE — the
+  trigger re-syncs the row, and the search query joins against the
+  source table to filter `deleted_at = ''`. Simpler than maintaining a
+  "this is logically deleted" trigger path.
+- The `/search` query is one UNION ALL across the five tables, filtered
+  per-source by the viewer's visibility rules (mentors see everything in
+  their rooms; mentees see only their own reports / tasks / submissions;
+  comments and assignments visible to all room members). Ranked by
+  `bm25()` ascending across the union.
+- Snippets use ASCII STX/ETX (`\x02`/`\x03`) as match markers. The
+  Go layer HTML-escapes the snippet text first, then swaps the markers
+  for `<mark>` / `</mark>`. User content can never inject HTML tags.
+- Single-word queries are turned into prefix matches (`hand → hand*`)
+  so most search-box UX expectations work. Multi-word queries fall
+  through to FTS5's implicit AND.
+- Indexing depends on the `sqlite_fts5` build tag (see Build & test).
+
 ## Reminder worker
 
 In-process goroutine started by `cmd/sinau/main.go` when reminders are enabled. Cancelled by the same `signal.NotifyContext` that shuts down the HTTP server.
@@ -187,14 +223,22 @@ Plus invite-only product positioning: every page emits `<meta name="robots" cont
 
 ## Build & test
 
+The mattn/go-sqlite3 driver compiles SQLite's FTS5 module only with
+the `sqlite_fts5` build tag, and `/search` depends on it. The repo's
+`Makefile` sets the tag for every target so you don't have to remember.
+
 ```sh
-go build ./...                    # validates every package compiles
-go vet ./...                      # static checks
-go test ./...                     # store + auth + web suites
-go build -o bin/sinau ./cmd/sinau # produce the binary (CGO required for SQLite)
+make build   # bin/sinau, release ldflags
+make test    # go test -tags sqlite_fts5 ./...
+make vet
+make run     # local dev server
 ```
 
-Test coverage focuses on the store (which encodes authorization rules) and on web-layer boundaries (classroom flow + auth boundaries + CSRF + notification gating).
+If you call the Go toolchain directly, pass `-tags sqlite_fts5`
+explicitly — without it the schema migration fails at boot with
+`no such module: fts5`. CGO is required for SQLite.
+
+Test coverage focuses on the store (which encodes authorization rules and the FTS triggers) and on web-layer boundaries (classroom flow + auth boundaries + CSRF + notification gating + edit/delete permissions).
 
 ## Non-goals & trade-offs
 
