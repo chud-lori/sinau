@@ -1129,6 +1129,7 @@
     <li>{{.T "help.mentor.s5"}}</li>
     <li>{{.T "help.mentor.s6"}}</li>
     <li>{{.T "help.mentor.s7"}}</li>
+    <li>{{.T "help.mentor.s8"}}</li>
   </ol>
 </section>
 
@@ -1148,8 +1149,16 @@
     <li>{{.T "help.mentee.s2"}}</li>
     <li>{{.T "help.mentee.s3"}}</li>
     <li>{{.T "help.mentee.s4"}}</li>
+    <li>{{.T "help.mentee.s5"}}</li>
   </ol>
 </section>
+
+{{if .User}}
+<section class="panel help-section">
+  <div class="section-head"><div><p class="eyebrow">{{.T "help.account.eyebrow"}}</p><h2>{{.T "help.account.title"}}</h2></div></div>
+  <p>{{.T "help.account.body.prefix"}}<a href="/profile">{{.T "help.account.body.link"}}</a>{{.T "help.account.body.suffix"}}</p>
+</section>
+{{end}}
 
 {{if .NotificationsEnabled}}
 <section class="panel help-section">
