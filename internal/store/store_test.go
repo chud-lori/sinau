@@ -202,10 +202,10 @@ func TestMenteeOnlySeesOwnReports(t *testing.T) {
 	menteeA, _ := joinMentee(t, st, codeA, "Mentee A", "a@example.com")
 	menteeB, _ := joinMentee(t, st, codeB, "Mentee B", "b@example.com")
 
-	if err := st.CreateReport(roomID, menteeA, "A learned", "A practiced", "", "A next", ""); err != nil {
+	if err := st.CreateReport(roomID, menteeA, "A learned", "A practiced", "", "A next", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CreateReport(roomID, menteeB, "B learned", "B practiced", "", "B next", ""); err != nil {
+	if err := st.CreateReport(roomID, menteeB, "B learned", "B practiced", "", "B next", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -271,7 +271,7 @@ func TestClassroomAssignmentsCanBeSubmittedAndReviewed(t *testing.T) {
 	if len(studentAssignments) != 1 || studentAssignments[0].MySubmissionStatus != "" {
 		t.Fatalf("expected one unsubmitted assignment, got %+v", studentAssignments)
 	}
-	if err := st.SubmitAssignment(roomID, studentAssignments[0].ID, menteeID, "https://colab.research.google.com/notebook", "Finished baseline"); err != nil {
+	if err := st.SubmitAssignment(roomID, studentAssignments[0].ID, menteeID, "Finished baseline", []domain.Link{{Label: "Notebook", URL: "https://colab.research.google.com/notebook"}}); err != nil {
 		t.Fatal(err)
 	}
 	submissions, err := st.Submissions(roomID)
@@ -410,7 +410,7 @@ func TestMemberOpenTaskCountDoesNotMultiplyByReports(t *testing.T) {
 	menteeID, _ := joinMentee(t, st, code, "Mentee", "mentee@example.com")
 
 	for i := 0; i < 3; i++ {
-		if err := st.CreateReport(roomID, menteeID, "learned", "practiced", "", "next", ""); err != nil {
+		if err := st.CreateReport(roomID, menteeID, "learned", "practiced", "", "next", nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -615,7 +615,7 @@ func TestRoleDashboards(t *testing.T) {
 	code := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
 	menteeID, _ := joinMentee(t, st, code, "Mentee", "mentee@example.com")
 
-	if err := st.CreateReport(roomID, menteeID, "learned", "practiced", "blocked", "next", ""); err != nil {
+	if err := st.CreateReport(roomID, menteeID, "learned", "practiced", "blocked", "next", nil); err != nil {
 		t.Fatal(err)
 	}
 	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")

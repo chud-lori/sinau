@@ -63,6 +63,21 @@
   {{range .SupportedLangs}}{{if eq (printf "%s" .) (printf "%s" $.Lang)}}<span class="lang-current" aria-current="true">{{$.LangLabel .}}</span>{{else}}<button class="lang-switch" name="lang" value="{{.}}" type="submit">{{$.LangLabel .}}</button>{{end}}{{end}}
 </form>{{end}}
 
+{{/* link_row is a single empty pair of inputs the user can fill with one
+     attachment. The Add-link button (hx-get -> /partials/link-row,
+     hx-swap=beforeend) appends another instance of this row. To remove
+     a link the user clears the URL field — the server-side parser
+     drops rows with empty URLs, no JS needed (CSP blocks inline JS).
+     For prefilled rows (editing an existing submission's links) the
+     parent template inlines the same HTML with `value` attributes set
+     directly — Go's html/template has no clean way to call methods on
+     map values, so a "prefill" version of this partial would be too
+     clever to be worth it. */}}
+{{define "link_row"}}<div class="link-row">
+  <input name="link_label" type="text" maxlength="120" placeholder="{{.T "form.link_label_placeholder"}}" aria-label="{{.T "form.link_label"}}">
+  <input name="link_url" type="url" maxlength="400" placeholder="https://..." aria-label="{{.T "form.link_url"}}">
+</div>{{end}}
+
 {{define "landing"}}{{template "layout_start" .}}
 <section class="landing-hero">
   <div class="landing-content">
@@ -391,12 +406,25 @@
         <p>{{.Instructions}}</p>
         <div class="report-actions">
           {{if .ResourceURL}}<a href="{{.ResourceURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_resource"}}</a>{{end}}
-          {{if .MySubmissionURL}}<a href="{{.MySubmissionURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_submission"}}</a>{{end}}
+          {{range .MySubmissionLinks}}<a href="{{.URL}}" rel="noreferrer" target="_blank">{{.Label}}</a>{{end}}
         </div>
         {{if .MyFeedback}}<p class="feedback-note"><strong>{{$.T "room.classroom.submit.feedback"}}</strong> {{.MyFeedback}}{{if .MyScore}} · {{$.Tf "room.classroom.submit.score" .MyScore}}{{end}}</p>{{end}}
         <form method="post" action="/rooms/{{$.Room.ID}}/assignments/{{.ID}}/submissions" class="stack submission-form">
           <input type="hidden" name="csrf" value="{{$.CSRF}}">
-          <label>{{$.T "form.submission_link"}} <input name="link_url" type="url" required placeholder="{{$.T "room.classroom.submit.placeholder.link"}}"></label>
+          <div class="links-field">
+            <p class="links-label">{{$.T "form.submission_link"}}</p>
+            <div id="links-{{.ID}}" class="links-list">
+              {{if .MySubmissionLinks}}
+                {{range .MySubmissionLinks}}<div class="link-row">
+                  <input name="link_label" type="text" maxlength="120" value="{{.Label}}" placeholder="{{$.T "form.link_label_placeholder"}}" aria-label="{{$.T "form.link_label"}}">
+                  <input name="link_url" type="url" maxlength="400" value="{{.URL}}" placeholder="https://..." aria-label="{{$.T "form.link_url"}}">
+                </div>{{end}}
+              {{else}}
+                {{template "link_row" $}}
+              {{end}}
+            </div>
+            <button type="button" class="link-add" hx-get="/partials/link-row" hx-target="#links-{{.ID}}" hx-swap="beforeend">{{$.T "form.add_link"}}</button>
+          </div>
           <label>{{$.T "form.note"}} <textarea name="note" placeholder="{{$.T "room.classroom.submit.placeholder.note"}}"></textarea></label>
           <button type="submit">{{if .MySubmissionStatus}}{{$.T "room.classroom.submit.button.update"}}{{else}}{{$.T "room.classroom.submit.button.submit"}}{{end}}</button>
         </form>
@@ -439,7 +467,7 @@
           <span class="status {{.Status}}">{{.Status}}</span>
         </div>
         {{if .Note}}<p>{{.Note}}</p>{{end}}
-        <p class="report-actions"><a href="{{.LinkURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_submission"}}</a></p>
+        <p class="report-actions">{{range .Links}}<a href="{{.URL}}" rel="noreferrer" target="_blank">{{.Label}}</a>{{end}}</p>
         {{if eq .Status "submitted"}}
           <form method="post" action="/rooms/{{$.Room.ID}}/submissions/{{.ID}}/review" class="review-form">
             <input type="hidden" name="csrf" value="{{$.CSRF}}">
@@ -541,7 +569,13 @@
       <label>{{.T "form.practiced"}} <textarea name="practiced" required placeholder="{{.T "room.checkin.placeholder.practiced"}}"></textarea></label>
       <label>{{.T "form.blocker"}} <textarea name="blocker" placeholder="{{.T "room.checkin.placeholder.blocker"}}"></textarea></label>
       <label>{{.T "form.next_plan"}} <textarea name="next_plan" required placeholder="{{.T "room.checkin.placeholder.next"}}"></textarea></label>
-      <label>{{.T "form.resource_link"}} <input name="link_url" type="url" placeholder="{{.T "room.checkin.placeholder.link"}}"></label>
+      <div class="links-field">
+        <p class="links-label">{{.T "form.links"}}</p>
+        <div id="report-links" class="links-list">
+          {{template "link_row" .}}
+        </div>
+        <button type="button" class="link-add" hx-get="/partials/link-row" hx-target="#report-links" hx-swap="beforeend">{{.T "form.add_link"}}</button>
+      </div>
       <button type="submit">{{.T "room.checkin.submit"}}</button>
     </form>
   </section>
@@ -602,7 +636,7 @@
         {{if .Blocker}}<p class="blocker">{{$.Tf "room.blocker.label" .Blocker}}</p>{{end}}
         <p>{{.Learned}}</p>
         <div class="report-actions">
-          {{if .LinkURL}}<a href="{{.LinkURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_resource"}}</a>{{end}}
+          {{range .Links}}<a href="{{.URL}}" rel="noreferrer" target="_blank">{{.Label}}</a>{{end}}
           <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.T "room.review_report"}}</a>
         </div>
       </article>
@@ -798,7 +832,7 @@
       {{if .Blocker}}<p class="blocker">{{$.Tf "room.blocker.label" .Blocker}}</p>{{end}}
       <p>{{.Learned}}</p>
       <div class="report-actions">
-        {{if .LinkURL}}<a href="{{.LinkURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_resource"}}</a>{{end}}
+        {{range .Links}}<a href="{{.URL}}" rel="noreferrer" target="_blank">{{.Label}}</a>{{end}}
         <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.T "room.review_report"}}</a>
       </div>
     </article>
@@ -832,7 +866,7 @@
     {{if .Report.Blocker}}<section><h2>{{.T "report.h.blocker"}}</h2><p class="blocker">{{.Report.Blocker}}</p></section>{{end}}
     <section><h2>{{.T "report.h.next"}}</h2><p>{{.Report.NextPlan}}</p></section>
   </div>
-  {{if .Report.LinkURL}}<p class="report-actions"><a href="{{.Report.LinkURL}}" rel="noreferrer" target="_blank">{{.T "room.open_resource"}}</a></p>{{end}}
+  {{if .Report.Links}}<p class="report-actions">{{range .Report.Links}}<a href="{{.URL}}" rel="noreferrer" target="_blank">{{.Label}}</a>{{end}}</p>{{end}}
 </section>
 <section class="panel">
   <div class="section-head">

@@ -135,9 +135,19 @@ type Report struct {
 	Practiced string
 	Blocker   string
 	NextPlan  string
-	LinkURL   string
+	Links     []Link
 	CreatedAt string
 	Comments  int
+}
+
+// Link is a labelled URL the mentee attaches to a report or submission so
+// the mentor sees what the work is at a glance (e.g. "Notebook" → Colab,
+// "Writeup" → Google Doc). Sorted by Position in the parent's list.
+type Link struct {
+	ID       string
+	Label    string
+	URL      string
+	Position int
 }
 
 type Comment struct {
@@ -180,7 +190,7 @@ type Assignment struct {
 	Submitted          int
 	TotalMentees       int
 	MySubmissionStatus string
-	MySubmissionURL    string
+	MySubmissionLinks  []Link
 	MyFeedback         string
 	MyScore            string
 }
@@ -192,7 +202,7 @@ type Submission struct {
 	StudentID       string
 	StudentName     string
 	StudentEmail    string
-	LinkURL         string
+	Links           []Link
 	Note            string
 	Status          string
 	Feedback        string

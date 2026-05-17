@@ -148,3 +148,17 @@ form.inline input[type="text"],form.inline input:not([type]){width:auto}
 @media (max-width:640px){
   .lang-picker .lang-switch,.lang-picker .lang-current{font-size:12px;padding:3px 8px}
 }
+
+/* Multi-link form field — used in report and assignment-submit forms.
+   Each row stacks label + url inputs on narrow widths, side-by-side
+   beyond 480px. The "Add link" button appends another instance via htmx. */
+.links-field{display:grid;gap:8px;border:1px solid var(--line);border-radius:12px;padding:14px;background:#fafcfa}
+.links-field .links-label{margin:0;font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.02em}
+.links-list{display:grid;gap:8px}
+.link-row{display:grid;grid-template-columns:1fr;gap:6px}
+@media (min-width:480px){
+  .link-row{grid-template-columns:minmax(120px,.55fr) minmax(0,1fr)}
+}
+.link-row input{width:100%;min-width:0}
+.link-add{justify-self:start;background:transparent;color:var(--accent);border:1px dashed var(--accent);border-radius:8px;padding:6px 12px;font:inherit;font-weight:700;cursor:pointer}
+.link-add:hover{background:rgba(23,107,82,.08)}

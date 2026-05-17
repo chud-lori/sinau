@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"html/template"
 	"log"
 	"net/http"
@@ -161,7 +162,18 @@ func (s *Server) Handler() http.Handler {
 		http.Redirect(w, r, "/help", http.StatusMovedPermanently)
 	})
 	mux.HandleFunc("POST /lang", s.withUser(s.setLanguage))
+	mux.HandleFunc("GET /partials/link-row", s.withUser(s.linkRowPartial))
 	return securityHeaders(mux)
+}
+
+// linkRowPartial returns a single empty labelled-link form row. The
+// multi-link form on reports and submissions calls this via htmx's
+// hx-get to append another row when the user clicks "Add link". We
+// render it through the same template engine as the rest of the app so
+// localised placeholders stay in sync.
+func (s *Server) linkRowPartial(w http.ResponseWriter, r *http.Request) {
+	pd := s.pageData(r, "")
+	s.render(w, "link_row", pd)
 }
 
 // setLanguage handles the topbar picker. Persists the choice to a cookie
@@ -639,9 +651,13 @@ func (s *Server) createReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	link := auth.Clean(r.FormValue("link_url"), 400)
-	if link != "" && !auth.ValidExternalURL(link) {
-		http.Error(w, "link must be an http or https URL", http.StatusBadRequest)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	links, err := collectLinks(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	learned := auth.Clean(r.FormValue("learned"), 2000)
@@ -652,11 +668,50 @@ func (s *Server) createReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "learned, practiced, and next plan are required", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.CreateReport(roomID, u.ID, learned, practiced, blocker, nextPlan, link); err != nil {
+	if err := s.store.CreateReport(roomID, u.ID, learned, practiced, blocker, nextPlan, links); err != nil {
 		s.serverError(w, err)
 		return
 	}
 	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+}
+
+// collectLinks reads pair-wise `link_label[i]` / `link_url[i]` form
+// fields off the request, drops empty rows, validates each URL, and
+// returns the resulting slice in form-order. It's the shared parser
+// used by both createReport and submitAssignment, since both flows
+// expose the same multi-link UI.
+//
+// Validation rules:
+//   - URLs must be http or https (auth.ValidExternalURL).
+//   - A row with an empty URL is skipped entirely (the user removed it).
+//   - An empty label gets a sensible default so something always renders.
+//   - Caps each list at 8 entries to bound the form size.
+func collectLinks(r *http.Request) ([]domain.Link, error) {
+	const maxLinks = 8
+	urls := r.Form["link_url"]
+	labels := r.Form["link_label"]
+	out := make([]domain.Link, 0, len(urls))
+	for i, raw := range urls {
+		url := auth.Clean(raw, 400)
+		if url == "" {
+			continue
+		}
+		if !auth.ValidExternalURL(url) {
+			return nil, errors.New("link must be an http or https URL")
+		}
+		label := ""
+		if i < len(labels) {
+			label = auth.Clean(labels[i], 120)
+		}
+		if label == "" {
+			label = "Link"
+		}
+		out = append(out, domain.Link{Label: label, URL: url})
+		if len(out) >= maxLinks {
+			break
+		}
+	}
+	return out, nil
 }
 
 func (s *Server) reportPage(w http.ResponseWriter, r *http.Request) {
@@ -853,13 +908,21 @@ func (s *Server) submitAssignment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	linkURL := auth.Clean(r.FormValue("link_url"), 400)
-	note := auth.Clean(r.FormValue("note"), 1600)
-	if linkURL == "" || !auth.ValidExternalURL(linkURL) {
-		http.Error(w, "submission link must be an http or https URL", http.StatusBadRequest)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.SubmitAssignment(roomID, assignmentID, u.ID, linkURL, note); err != nil {
+	links, err := collectLinks(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(links) == 0 {
+		http.Error(w, "at least one submission link is required", http.StatusBadRequest)
+		return
+	}
+	note := auth.Clean(r.FormValue("note"), 1600)
+	if err := s.store.SubmitAssignment(roomID, assignmentID, u.ID, note, links); err != nil {
 		s.serverError(w, err)
 		return
 	}

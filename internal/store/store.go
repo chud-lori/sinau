@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -121,7 +122,14 @@ var schemaV1 = []string{
 		practiced TEXT NOT NULL,
 		blocker TEXT NOT NULL,
 		next_plan TEXT NOT NULL,
-		link_url TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS report_links (
+		id TEXT PRIMARY KEY,
+		report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+		label TEXT NOT NULL,
+		url TEXT NOT NULL,
+		position INTEGER NOT NULL DEFAULT 0,
 		created_at TEXT NOT NULL
 	)`,
 	`CREATE TABLE IF NOT EXISTS comments (
@@ -162,7 +170,6 @@ var schemaV1 = []string{
 		id TEXT PRIMARY KEY,
 		assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
 		student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-		link_url TEXT NOT NULL,
 		note TEXT NOT NULL,
 		status TEXT NOT NULL CHECK(status IN ('submitted','reviewed','revise')),
 		feedback TEXT NOT NULL,
@@ -170,6 +177,14 @@ var schemaV1 = []string{
 		submitted_at TEXT NOT NULL,
 		reviewed_at TEXT NOT NULL,
 		UNIQUE(assignment_id, student_id)
+	)`,
+	`CREATE TABLE IF NOT EXISTS submission_links (
+		id TEXT PRIMARY KEY,
+		submission_id TEXT NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+		label TEXT NOT NULL,
+		url TEXT NOT NULL,
+		position INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL
 	)`,
 	`CREATE TABLE IF NOT EXISTS notification_prefs (
 		user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -199,6 +214,8 @@ var schemaV1 = []string{
 	`CREATE INDEX IF NOT EXISTS idx_assignments_room_due ON assignments(room_id, due_date, created_at DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_submissions_assignment ON submissions(assignment_id, submitted_at DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_submissions_student ON submissions(student_id, submitted_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_report_links_report ON report_links(report_id, position)`,
+	`CREATE INDEX IF NOT EXISTS idx_submission_links_submission ON submission_links(submission_id, position)`,
 	`CREATE INDEX IF NOT EXISTS idx_points_ledger_user ON points_ledger(user_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_points_ledger_room_user ON points_ledger(room_id, user_id)`,
 }
@@ -491,7 +508,7 @@ func (s *Store) menteeDashboardTasks(userID string) ([]domain.Task, error) {
 }
 
 func (s *Store) menteeRecentReports(userID string) ([]domain.Report, error) {
-	rows, err := s.db.Query(`SELECT rp.id, rp.room_id, rp.user_id, r.name, rp.learned, rp.practiced, rp.blocker, rp.next_plan, rp.link_url, rp.created_at, COUNT(c.id)
+	rows, err := s.db.Query(`SELECT rp.id, rp.room_id, rp.user_id, r.name, rp.learned, rp.practiced, rp.blocker, rp.next_plan, rp.created_at, COUNT(c.id)
 		FROM reports rp
 		JOIN rooms r ON r.id = rp.room_id
 		LEFT JOIN comments c ON c.report_id = rp.id
@@ -506,10 +523,67 @@ func (s *Store) menteeRecentReports(userID string) ([]domain.Report, error) {
 	var out []domain.Report
 	for rows.Next() {
 		var r domain.Report
-		if err := rows.Scan(&r.ID, &r.RoomID, &r.UserID, &r.Author, &r.Learned, &r.Practiced, &r.Blocker, &r.NextPlan, &r.LinkURL, &r.CreatedAt, &r.Comments); err != nil {
+		if err := rows.Scan(&r.ID, &r.RoomID, &r.UserID, &r.Author, &r.Learned, &r.Practiced, &r.Blocker, &r.NextPlan, &r.CreatedAt, &r.Comments); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return s.attachReportLinks(out)
+}
+
+// attachReportLinks loads link rows for the given reports in a single
+// IN(...) query and assigns each report its Links slice. Single round-
+// trip — avoids N+1 against report_links.
+func (s *Store) attachReportLinks(reports []domain.Report) ([]domain.Report, error) {
+	if len(reports) == 0 {
+		return reports, nil
+	}
+	ids := make([]string, len(reports))
+	for i, r := range reports {
+		ids[i] = r.ID
+	}
+	groups, err := s.linksByParent("report_links", "report_id", ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range reports {
+		reports[i].Links = groups[reports[i].ID]
+	}
+	return reports, nil
+}
+
+// linksByParent is the shared batch loader for report_links and
+// submission_links. It builds a single IN(...) query, scans (parent_id,
+// link) rows, and groups them in Go so callers get an O(1) map lookup
+// per parent. Ordering within each group follows position then
+// created_at — the same ordering used by the user who built the list.
+func (s *Store) linksByParent(table, parentCol string, ids []string) (map[string][]domain.Link, error) {
+	out := map[string][]domain.Link{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	placeholders := strings.Repeat("?,", len(ids)-1) + "?"
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	q := fmt.Sprintf(`SELECT id, %s, label, url, position FROM %s WHERE %s IN (%s) ORDER BY %s, position, created_at`,
+		parentCol, table, parentCol, placeholders, parentCol)
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var l domain.Link
+		var parentID string
+		if err := rows.Scan(&l.ID, &parentID, &l.Label, &l.URL, &l.Position); err != nil {
+			return nil, err
+		}
+		out[parentID] = append(out[parentID], l)
 	}
 	return out, rows.Err()
 }
@@ -908,7 +982,7 @@ func (s *Store) Members(roomID string) ([]domain.Member, error) {
 }
 
 func (s *Store) Reports(roomID, userID, role string) ([]domain.Report, error) {
-	query := `SELECT r.id, r.room_id, r.user_id, u.name, r.learned, r.practiced, r.blocker, r.next_plan, r.link_url, r.created_at, COUNT(c.id)
+	query := `SELECT r.id, r.room_id, r.user_id, u.name, r.learned, r.practiced, r.blocker, r.next_plan, r.created_at, COUNT(c.id)
 		FROM reports r JOIN users u ON u.id = r.user_id
 		LEFT JOIN comments c ON c.report_id = r.id
 		WHERE r.room_id = ?`
@@ -926,32 +1000,82 @@ func (s *Store) Reports(roomID, userID, role string) ([]domain.Report, error) {
 	var out []domain.Report
 	for rows.Next() {
 		var r domain.Report
-		if err := rows.Scan(&r.ID, &r.RoomID, &r.UserID, &r.Author, &r.Learned, &r.Practiced, &r.Blocker, &r.NextPlan, &r.LinkURL, &r.CreatedAt, &r.Comments); err != nil {
+		if err := rows.Scan(&r.ID, &r.RoomID, &r.UserID, &r.Author, &r.Learned, &r.Practiced, &r.Blocker, &r.NextPlan, &r.CreatedAt, &r.Comments); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return s.attachReportLinks(out)
 }
 
-func (s *Store) CreateReport(roomID, userID, learned, practiced, blocker, nextPlan, link string) error {
+// CreateReport persists the mentee's check-in and its attached links in
+// a single transaction. Empty Links is fine — the report just renders
+// without external attachments.
+func (s *Store) CreateReport(roomID, userID, learned, practiced, blocker, nextPlan string, links []domain.Link) error {
 	id, err := auth.NewID()
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`INSERT INTO reports(id,room_id,user_id,learned,practiced,blocker,next_plan,link_url,created_at)
-		VALUES(?,?,?,?,?,?,?,?,?)`, id, roomID, userID, learned, practiced, blocker, nextPlan, link, auth.Now())
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := auth.Now()
+	if _, err := tx.Exec(`INSERT INTO reports(id,room_id,user_id,learned,practiced,blocker,next_plan,created_at)
+		VALUES(?,?,?,?,?,?,?,?)`, id, roomID, userID, learned, practiced, blocker, nextPlan, now); err != nil {
+		return err
+	}
+	if err := insertLinksTx(tx, "report_links", "report_id", id, links, now); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ReportByID(roomID, reportID string) (domain.Report, error) {
 	var r domain.Report
-	err := s.db.QueryRow(`SELECT r.id, r.room_id, r.user_id, u.name, r.learned, r.practiced, r.blocker, r.next_plan, r.link_url, r.created_at, COUNT(c.id)
+	err := s.db.QueryRow(`SELECT r.id, r.room_id, r.user_id, u.name, r.learned, r.practiced, r.blocker, r.next_plan, r.created_at, COUNT(c.id)
 		FROM reports r JOIN users u ON u.id = r.user_id
 		LEFT JOIN comments c ON c.report_id = r.id
 		WHERE r.room_id = ? AND r.id = ?
-		GROUP BY r.id`, roomID, reportID).Scan(&r.ID, &r.RoomID, &r.UserID, &r.Author, &r.Learned, &r.Practiced, &r.Blocker, &r.NextPlan, &r.LinkURL, &r.CreatedAt, &r.Comments)
-	return r, err
+		GROUP BY r.id`, roomID, reportID).Scan(&r.ID, &r.RoomID, &r.UserID, &r.Author, &r.Learned, &r.Practiced, &r.Blocker, &r.NextPlan, &r.CreatedAt, &r.Comments)
+	if err != nil {
+		return r, err
+	}
+	groups, err := s.linksByParent("report_links", "report_id", []string{r.ID})
+	if err != nil {
+		return r, err
+	}
+	r.Links = groups[r.ID]
+	return r, nil
+}
+
+// insertLinksTx writes a slice of labelled links to the given child
+// table (report_links or submission_links) inside the caller's
+// transaction. Caller is responsible for delete-before-insert when the
+// parent already has rows (e.g. resubmission flow).
+func insertLinksTx(tx *sql.Tx, table, parentCol, parentID string, links []domain.Link, now string) error {
+	if len(links) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(fmt.Sprintf(`INSERT INTO %s(id, %s, label, url, position, created_at) VALUES(?,?,?,?,?,?)`, table, parentCol))
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for i, l := range links {
+		id, err := auth.NewID()
+		if err != nil {
+			return err
+		}
+		if _, err := stmt.Exec(id, parentID, l.Label, l.URL, i, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) Comments(reportID string) ([]domain.Comment, error) {
@@ -1117,7 +1241,7 @@ func (s *Store) Assignments(roomID, userID, role string) ([]domain.Assignment, e
 		return out, rows.Err()
 	}
 	rows, err := s.db.Query(`SELECT a.id, a.room_id, a.title, a.instructions, a.resource_url, a.due_date, a.created_at,
-		COALESCE(sub.status, ''), COALESCE(sub.link_url, ''), COALESCE(sub.feedback, ''), COALESCE(sub.score, '')
+		COALESCE(sub.id, ''), COALESCE(sub.status, ''), COALESCE(sub.feedback, ''), COALESCE(sub.score, '')
 		FROM assignments a
 		LEFT JOIN submissions sub ON sub.assignment_id = a.id AND sub.student_id = ?
 		WHERE a.room_id = ?
@@ -1133,19 +1257,36 @@ func (s *Store) Assignments(roomID, userID, role string) ([]domain.Assignment, e
 	}
 	defer rows.Close()
 	var out []domain.Assignment
+	var subIDs []string
+	subIDToAsgnIdx := map[string]int{}
 	for rows.Next() {
 		var a domain.Assignment
-		if err := rows.Scan(&a.ID, &a.RoomID, &a.Title, &a.Instructions, &a.ResourceURL, &a.DueDate, &a.CreatedAt, &a.MySubmissionStatus, &a.MySubmissionURL, &a.MyFeedback, &a.MyScore); err != nil {
+		var submissionID string
+		if err := rows.Scan(&a.ID, &a.RoomID, &a.Title, &a.Instructions, &a.ResourceURL, &a.DueDate, &a.CreatedAt, &submissionID, &a.MySubmissionStatus, &a.MyFeedback, &a.MyScore); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
+		if submissionID != "" {
+			subIDs = append(subIDs, submissionID)
+			subIDToAsgnIdx[submissionID] = len(out) - 1
+		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	groups, err := s.linksByParent("submission_links", "submission_id", subIDs)
+	if err != nil {
+		return nil, err
+	}
+	for subID, idx := range subIDToAsgnIdx {
+		out[idx].MySubmissionLinks = groups[subID]
+	}
+	return out, nil
 }
 
 func (s *Store) Submissions(roomID string) ([]domain.Submission, error) {
 	rows, err := s.db.Query(`SELECT sub.id, sub.assignment_id, a.title, sub.student_id, u.name, u.email,
-		sub.link_url, sub.note, sub.status, sub.feedback, sub.score, sub.submitted_at, sub.reviewed_at
+		sub.note, sub.status, sub.feedback, sub.score, sub.submitted_at, sub.reviewed_at
 		FROM submissions sub
 		JOIN assignments a ON a.id = sub.assignment_id
 		JOIN users u ON u.id = sub.student_id
@@ -1158,12 +1299,26 @@ func (s *Store) Submissions(roomID string) ([]domain.Submission, error) {
 	var out []domain.Submission
 	for rows.Next() {
 		var sub domain.Submission
-		if err := rows.Scan(&sub.ID, &sub.AssignmentID, &sub.AssignmentTitle, &sub.StudentID, &sub.StudentName, &sub.StudentEmail, &sub.LinkURL, &sub.Note, &sub.Status, &sub.Feedback, &sub.Score, &sub.SubmittedAt, &sub.ReviewedAt); err != nil {
+		if err := rows.Scan(&sub.ID, &sub.AssignmentID, &sub.AssignmentTitle, &sub.StudentID, &sub.StudentName, &sub.StudentEmail, &sub.Note, &sub.Status, &sub.Feedback, &sub.Score, &sub.SubmittedAt, &sub.ReviewedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, sub)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(out))
+	for i, sub := range out {
+		ids[i] = sub.ID
+	}
+	groups, err := s.linksByParent("submission_links", "submission_id", ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Links = groups[out[i].ID]
+	}
+	return out, nil
 }
 
 func (s *Store) CreateAssignment(roomID, createdBy, title, instructions, resourceURL, dueDate string) error {
@@ -1176,34 +1331,62 @@ func (s *Store) CreateAssignment(roomID, createdBy, title, instructions, resourc
 	return err
 }
 
-func (s *Store) SubmitAssignment(roomID, assignmentID, studentID, linkURL, note string) error {
+// SubmitAssignment writes (or replaces) the mentee's submission for an
+// assignment. Resubmission clears any prior review state and swaps out
+// the link list — old links are deleted, new links inserted in the same
+// transaction so the row is never half-updated.
+func (s *Store) SubmitAssignment(roomID, assignmentID, studentID, note string, links []domain.Link) error {
 	if !s.IsMentee(roomID, studentID) {
 		return errors.New("student is not a mentee in this room")
 	}
-	id, err := auth.NewID()
+	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback()
 	now := auth.Now()
-	res, err := s.db.Exec(`INSERT INTO submissions(id, assignment_id, student_id, link_url, note, status, feedback, score, submitted_at, reviewed_at)
-		SELECT ?, a.id, ?, ?, ?, 'submitted', '', '', ?, ''
-		FROM assignments a
-		WHERE a.id = ? AND a.room_id = ?
-		ON CONFLICT(assignment_id, student_id) DO UPDATE SET
-			link_url = excluded.link_url,
-			note = excluded.note,
-			status = 'submitted',
-			feedback = '',
-			score = '',
-			submitted_at = excluded.submitted_at,
-			reviewed_at = ''`, id, studentID, linkURL, note, now, assignmentID, roomID)
-	if err != nil {
+
+	// Make sure the assignment exists in this room before doing anything.
+	var asgnExists int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM assignments WHERE id = ? AND room_id = ?`, assignmentID, roomID).Scan(&asgnExists); err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if asgnExists != 1 {
 		return sql.ErrNoRows
 	}
-	return nil
+
+	// Find an existing submission ID (if any) so we can delete its links
+	// before inserting the new set. Avoids leaving orphan links on resubmit.
+	var existingID string
+	switch err := tx.QueryRow(`SELECT id FROM submissions WHERE assignment_id = ? AND student_id = ?`, assignmentID, studentID).Scan(&existingID); err {
+	case nil, sql.ErrNoRows:
+	default:
+		return err
+	}
+
+	submissionID := existingID
+	if submissionID == "" {
+		submissionID, err = auth.NewID()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO submissions(id, assignment_id, student_id, note, status, feedback, score, submitted_at, reviewed_at)
+			VALUES(?,?,?,?,'submitted','','',?,'')`, submissionID, assignmentID, studentID, note, now); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.Exec(`UPDATE submissions SET note = ?, status = 'submitted', feedback = '', score = '', submitted_at = ?, reviewed_at = '' WHERE id = ?`,
+			note, now, submissionID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM submission_links WHERE submission_id = ?`, submissionID); err != nil {
+			return err
+		}
+	}
+	if err := insertLinksTx(tx, "submission_links", "submission_id", submissionID, links, now); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ReviewSubmission writes the teacher's review for a single submission.
