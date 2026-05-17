@@ -49,13 +49,13 @@ func TestRoleAndModeLabel(t *testing.T) {
 		want       string
 	}{
 		{LangEN, "mentorship", "mentor", "Mentor"},
-		{LangEN, "mentorship", "learner", "Learner"},
+		{LangEN, "mentorship", "mentee", "Mentee"},
 		{LangEN, "classroom", "mentor", "Teacher"},
-		{LangEN, "classroom", "learner", "Student"},
+		{LangEN, "classroom", "mentee", "Student"},
 		{LangID, "mentorship", "mentor", "Mentor"},
-		{LangID, "mentorship", "learner", "Murid"},
+		{LangID, "mentorship", "mentee", "Mentee"},
 		{LangID, "classroom", "mentor", "Guru"},
-		{LangID, "classroom", "learner", "Siswa"},
+		{LangID, "classroom", "mentee", "Siswa"},
 	}
 	for _, tc := range cases {
 		if got := RoleLabel(tc.lang, tc.mode, tc.role); got != tc.want {

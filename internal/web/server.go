@@ -71,12 +71,12 @@ type PageData struct {
 	InviteCode           string
 	JoinCode             string
 	Stats                domain.Stats
-	RoomLearners         []domain.Member
+	RoomMentees          []domain.Member
 	Leaderboard          []domain.LeaderboardEntry
 	MyPoints             int
 	MyRank               domain.Rank
 	MentorDash           domain.MentorDashboard
-	LearnerDash          domain.LearnerDashboard
+	MenteeDash           domain.MenteeDashboard
 	Prefs                domain.NotificationPrefs
 }
 
@@ -89,7 +89,7 @@ func (p PageData) T(key string) string { return i18n.T(p.Lang, key) }
 func (p PageData) Tf(key string, args ...any) string { return i18n.Tf(p.Lang, key, args...) }
 
 // RoleLabel translates a (mode, role) pair. Centralised here so templates
-// never branch on raw "mentor"/"learner" strings to pick a localised label.
+// never branch on raw "mentor"/"mentee" strings to pick a localised label.
 func (p PageData) RoleLabel(mode, role string) string {
 	return i18n.RoleLabel(p.Lang, mode, role)
 }
@@ -355,15 +355,15 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		s.render(w, "mentor_home", pd)
 		return
 	}
-	dash, err := s.store.LearnerDashboard(u.ID)
+	dash, err := s.store.MenteeDashboard(u.ID)
 	if err != nil {
 		s.serverError(w, err)
 		return
 	}
-	pd := s.pageData(r, "title.dashboard.learner")
+	pd := s.pageData(r, "title.dashboard.mentee")
 	pd.Rooms = dash.Rooms
-	pd.LearnerDash = dash
-	s.render(w, "learner_home", pd)
+	pd.MenteeDash = dash
+	s.render(w, "mentee_home", pd)
 }
 
 func (s *Server) setupForm(w http.ResponseWriter, r *http.Request) {
@@ -561,10 +561,10 @@ func (s *Server) roomPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rm.Role = role
-	learners := make([]domain.Member, 0, len(data.Members))
+	mentees := make([]domain.Member, 0, len(data.Members))
 	for _, m := range data.Members {
-		if m.Role == domain.RoleLearner {
-			learners = append(learners, m)
+		if m.Role == domain.RoleMentee {
+			mentees = append(mentees, m)
 		}
 	}
 	pd := s.pageData(r, "")
@@ -572,7 +572,7 @@ func (s *Server) roomPage(w http.ResponseWriter, r *http.Request) {
 	pd.TitleKey = ""
 	pd.Room = rm
 	pd.Members = data.Members
-	pd.RoomLearners = learners
+	pd.RoomMentees = mentees
 	pd.Reports = data.Reports
 	pd.Tasks = data.Tasks
 	pd.Assignments = data.Classroom.Assignments
@@ -582,7 +582,7 @@ func (s *Server) roomPage(w http.ResponseWriter, r *http.Request) {
 	pd.Stats = data.Stats
 	pd.MyPoints = data.MyPoints
 	pd.MyRank = data.MyRank
-	// data.Leaderboard is already empty for learners in rooms with the
+	// data.Leaderboard is already empty for mentees in rooms with the
 	// visibility toggle off (see RoomData), so a direct copy is safe.
 	pd.Leaderboard = data.Leaderboard
 	s.render(w, "room", pd)
@@ -597,7 +597,7 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	inviteRole := r.FormValue("role")
-	if inviteRole != domain.RoleMentor && inviteRole != domain.RoleLearner {
+	if inviteRole != domain.RoleMentor && inviteRole != domain.RoleMentee {
 		http.Error(w, "bad invite role", http.StatusBadRequest)
 		return
 	}
@@ -698,7 +698,7 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 }
 
 // assignAllSentinel is the form value used to mean "create one task per
-// learner in this room". It is intentionally not a valid 32-char hex user
+// mentee in this room". It is intentionally not a valid 32-char hex user
 // ID so it can never collide with a real assignee.
 const assignAllSentinel = "all"
 
@@ -725,18 +725,18 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if assignedTo == assignAllSentinel {
-		count, err := s.store.CreateTaskForLearners(roomID, u.ID, title, detail, dueDate)
+		count, err := s.store.CreateTaskForMentees(roomID, u.ID, title, detail, dueDate)
 		if err != nil {
 			s.serverError(w, err)
 			return
 		}
 		if count == 0 {
-			http.Error(w, "no learners in this room to assign", http.StatusBadRequest)
+			http.Error(w, "no mentees in this room to assign", http.StatusBadRequest)
 			return
 		}
 	} else {
-		if !s.store.IsLearner(roomID, assignedTo) {
-			http.Error(w, "assignee must be a learner in this room", http.StatusBadRequest)
+		if !s.store.IsMentee(roomID, assignedTo) {
+			http.Error(w, "assignee must be a mentee in this room", http.StatusBadRequest)
 			return
 		}
 		if err := s.store.CreateTask(roomID, assignedTo, u.ID, title, detail, dueDate); err != nil {
@@ -832,7 +832,7 @@ func (s *Server) submitAssignment(w http.ResponseWriter, r *http.Request) {
 	u := current(r)
 	roomID, assignmentID := r.PathValue("roomID"), r.PathValue("assignmentID")
 	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
-	if !ok || role != domain.RoleLearner || rm.Mode != domain.RoomModeClassroom {
+	if !ok || role != domain.RoleMentee || rm.Mode != domain.RoomModeClassroom {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}

@@ -55,7 +55,7 @@ Key tables:
 - **users** — account, password hash, `can_create_rooms` flag.
 - **sessions** — `id_hash` is sha256(token); the raw token lives only in the cookie.
 - **rooms** — `mode` (`mentorship` | `classroom`), `leaderboard_visible`.
-- **memberships** — `(room_id, user_id)` PK, `role` (`mentor` | `learner`).
+- **memberships** — `(room_id, user_id)` PK, `role` (`mentor` | `mentee`).
 - **invites** — single-use codes (`code_hash`) bound to a room + role.
 - **reports** / **comments** — mentorship room artefacts.
 - **tasks** — mentorship room artefacts. `reviewed_at` locks status changes once a mentor awards points.
@@ -68,17 +68,17 @@ Key tables:
 Three orthogonal concepts:
 
 1. **Account capability** (`users.can_create_rooms`): can this account create new rooms? Bootstrap sets this on the first user; new users joining via invite never get it implicitly.
-2. **Room membership** (`memberships.role`): inside a specific room, this user is a `mentor` or a `learner`. Authoritative for room-level authorization.
+2. **Room membership** (`memberships.role`): inside a specific room, this user is a `mentor` or a `mentee`. Authoritative for room-level authorization.
 3. **Room mode** (`rooms.mode`): this room runs the `mentorship` workflow or the `classroom` workflow.
 
 The same person can be:
 
 - A mentor in a Mentorship room → labelled "Mentor" in the UI.
 - A teacher in a Classroom room → labelled "Teacher" in the UI.
-- A learner in another Mentorship room → labelled "Learner".
+- A mentee in another Mentorship room → labelled "Mentee".
 - A student in another Classroom room → labelled "Student".
 
-The data layer stores only `mentor`/`learner`. The display layer translates per mode via `Room.RoleLabel(role)` / `Room.MyRoleLabel()` / `Room.ModeLabel()` (`internal/domain/domain.go`).
+The data layer stores only `mentor`/`mentee`. The display layer translates per mode via `Room.RoleLabel(role)` / `Room.MyRoleLabel()` / `Room.ModeLabel()` (`internal/domain/domain.go`).
 
 Inviting a mentor to a room grants room-level mentor powers but **not** account-level room creation. This is verified by `TestRoomMentorInviteDoesNotGrantCreateRoomsCapability`.
 
@@ -96,7 +96,7 @@ Every room-scoped handler calls `store.RoomAccess(roomID, userID)` first; the re
 
 - `createTask` — requires `role == mentor`.
 - `createAssignment`, `reviewSubmission` — require `role == mentor` **and** `room.Mode == classroom`.
-- `submitAssignment` — requires `role == learner` **and** `room.Mode == classroom`.
+- `submitAssignment` — requires `role == mentee` **and** `room.Mode == classroom`.
 - `updateRoomSettings`, `createInvite` — require `role == mentor`.
 
 Two idempotency guards in the store layer protect against accidental re-edits:
@@ -167,11 +167,11 @@ for {
 
 ## Frontend
 
-- Server-rendered HTML via Go `html/template`. Single file (`templates/app.html`) with named templates (`landing`, `login`, `join`, `setup`, `mentor_home`, `learner_home`, `room`, `report`, `settings`, `help`, `invite_created`).
+- Server-rendered HTML via Go `html/template`. Single file (`templates/app.html`) with named templates (`landing`, `login`, `join`, `setup`, `mentor_home`, `mentee_home`, `room`, `report`, `settings`, `help`, `invite_created`).
 - Progressive enhancement via [htmx](https://htmx.org) — only used for the invite form swap (`hx-post`, `hx-target`).
 - Hand-rolled CSS with design tokens (`--bg`, `--accent`, `--line`, etc.) plus mobile breakpoints at 860px and 640px.
 - No JS build. No npm. htmx is vendored as a single file.
-- Layered role display is centralised in three `domain.Room` methods (`RoleLabel`, `MyRoleLabel`, `ModeLabel`) so templates never render raw `mentor`/`learner`/`classroom` strings.
+- Layered role display is centralised in three `domain.Room` methods (`RoleLabel`, `MyRoleLabel`, `ModeLabel`) so templates never render raw `mentor`/`mentee`/`classroom` strings.
 
 ## Security headers
 

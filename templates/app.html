@@ -73,7 +73,7 @@
       {{if .SetupNeeded}}<a class="button primary" href="/setup">{{.T "landing.cta.create_first"}}</a>{{end}}
       <a class="button secondary" href="/help">{{.T "landing.cta.guide"}}</a>
       <a class="button secondary" href="/login">{{.T "landing.cta.login"}}</a>
-      <a class="button secondary" href="/join">{{.T "landing.cta.join_learner"}}</a>
+      <a class="button secondary" href="/join">{{.T "landing.cta.join_mentee"}}</a>
     </div>
   </div>
   <div class="landing-visual">
@@ -140,7 +140,7 @@
     <label>{{.T "form.password"}} <input name="password" type="password" required autocomplete="current-password"></label>
     <button type="submit">{{.T "login.submit"}}</button>
   </form>
-  <p class="muted">{{.T "login.new_learner"}} <a href="/join">{{.T "login.join_link"}}</a>.</p>
+  <p class="muted">{{.T "login.new_mentee"}} <a href="/join">{{.T "login.join_link"}}</a>.</p>
 </section>
 {{template "layout_end" .}}{{end}}
 
@@ -195,7 +195,7 @@
 
 <section class="mentor-summary">
   <div><span>{{.T "mentor.summary.rooms"}}</span><strong>{{.MentorDash.Summary.Rooms}}</strong></div>
-  <div><span>{{.T "mentor.summary.learners"}}</span><strong>{{.MentorDash.Summary.ActiveLearners}}</strong></div>
+  <div><span>{{.T "mentor.summary.mentees"}}</span><strong>{{.MentorDash.Summary.ActiveMentees}}</strong></div>
   <div><span>{{.T "mentor.summary.feedback"}}</span><strong>{{.MentorDash.Summary.WaitingFeedback}}</strong></div>
   <div><span>{{.T "mentor.summary.blockers"}}</span><strong>{{.MentorDash.Summary.Blockers}}</strong></div>
   <div><span>{{.T "mentor.summary.overdue"}}</span><strong>{{.MentorDash.Summary.OverdueTasks}}</strong></div>
@@ -239,78 +239,78 @@
   </section>
 </div>
 
-<section class="panel learner-progress-panel">
+<section class="panel mentee-progress-panel">
   <div class="section-head">
     <div>
-      <p class="eyebrow">{{.T "mentor.learners.eyebrow"}}</p>
-      <h2>{{.T "mentor.learners.title"}}</h2>
+      <p class="eyebrow">{{.T "mentor.mentees.eyebrow"}}</p>
+      <h2>{{.T "mentor.mentees.title"}}</h2>
     </div>
   </div>
   <div class="progress-table">
-    <div class="progress-head"><span>{{.T "mentor.learners.col.learner"}}</span><span>{{.T "mentor.learners.col.room"}}</span><span>{{.T "mentor.learners.col.last"}}</span><span>{{.T "mentor.learners.col.tasks"}}</span><span>{{.T "mentor.learners.col.status"}}</span></div>
-    {{range .MentorDash.Learners}}
+    <div class="progress-head"><span>{{.T "mentor.mentees.col.mentee"}}</span><span>{{.T "mentor.mentees.col.room"}}</span><span>{{.T "mentor.mentees.col.last"}}</span><span>{{.T "mentor.mentees.col.tasks"}}</span><span>{{.T "mentor.mentees.col.status"}}</span></div>
+    {{range .MentorDash.Mentees}}
       <a class="progress-row" href="/rooms/{{.RoomID}}">
-        <span><strong>{{.Name}}</strong><small>{{$.Tf "mentor.learners.reports_week" .ReportsThisWeek}}</small></span>
+        <span><strong>{{.Name}}</strong><small>{{$.Tf "mentor.mentees.reports_week" .ReportsThisWeek}}</small></span>
         <span>{{.RoomName}}</span>
-        <span>{{if .LastReport}}{{.LastReport}}{{else}}{{$.T "mentor.learners.no_report"}}{{end}}</span>
-        <span>{{$.Tf "mentor.learners.tasks_state" .OpenTasks .OverdueTasks}}</span>
+        <span>{{if .LastReport}}{{.LastReport}}{{else}}{{$.T "mentor.mentees.no_report"}}{{end}}</span>
+        <span>{{$.Tf "mentor.mentees.tasks_state" .OpenTasks .OverdueTasks}}</span>
         <span class="status-pill {{.Status}}">{{.Status}}</span>
       </a>
     {{else}}
-      <div class="empty-inline"><strong>{{.T "mentor.learners.empty.title"}}</strong><p class="muted">{{.T "mentor.learners.empty.body"}}</p></div>
+      <div class="empty-inline"><strong>{{.T "mentor.mentees.empty.title"}}</strong><p class="muted">{{.T "mentor.mentees.empty.body"}}</p></div>
     {{end}}
   </div>
 </section>
 {{template "layout_end" .}}{{end}}
 
-{{define "learner_home"}}{{template "layout_start" .}}
-<section class="dash-home-hero learner">
+{{define "mentee_home"}}{{template "layout_start" .}}
+<section class="dash-home-hero mentee">
   <div>
-    <p class="eyebrow">{{.T "learner.eyebrow"}}</p>
-    <h1>{{.T "learner.title"}}</h1>
-    <p class="muted">{{.T "learner.lede"}}</p>
+    <p class="eyebrow">{{.T "mentee.eyebrow"}}</p>
+    <h1>{{.T "mentee.title"}}</h1>
+    <p class="muted">{{.T "mentee.lede"}}</p>
   </div>
 </section>
 
-<section class="mentor-summary learner-summary">
-  <div><span>{{.T "learner.summary.rooms"}}</span><strong>{{.LearnerDash.Summary.Rooms}}</strong></div>
-  <div><span>{{.T "learner.summary.open"}}</span><strong>{{.LearnerDash.Summary.OpenTasks}}</strong></div>
-  <div><span>{{.T "learner.summary.due"}}</span><strong>{{.LearnerDash.Summary.DueSoonTasks}}</strong></div>
-  <div><span>{{.T "learner.summary.overdue"}}</span><strong>{{.LearnerDash.Summary.OverdueTasks}}</strong></div>
-  <div><span>{{.T "learner.summary.reports"}}</span><strong>{{.LearnerDash.Summary.ReportsThisWeek}}</strong></div>
+<section class="mentor-summary mentee-summary">
+  <div><span>{{.T "mentee.summary.rooms"}}</span><strong>{{.MenteeDash.Summary.Rooms}}</strong></div>
+  <div><span>{{.T "mentee.summary.open"}}</span><strong>{{.MenteeDash.Summary.OpenTasks}}</strong></div>
+  <div><span>{{.T "mentee.summary.due"}}</span><strong>{{.MenteeDash.Summary.DueSoonTasks}}</strong></div>
+  <div><span>{{.T "mentee.summary.overdue"}}</span><strong>{{.MenteeDash.Summary.OverdueTasks}}</strong></div>
+  <div><span>{{.T "mentee.summary.reports"}}</span><strong>{{.MenteeDash.Summary.ReportsThisWeek}}</strong></div>
 </section>
 
 <div class="home-grid">
   <section class="panel">
-    <div class="section-head"><div><p class="eyebrow">{{.T "learner.tasks.eyebrow"}}</p><h2>{{.T "learner.tasks.title"}}</h2></div></div>
-    {{range .LearnerDash.Tasks}}
+    <div class="section-head"><div><p class="eyebrow">{{.T "mentee.tasks.eyebrow"}}</p><h2>{{.T "mentee.tasks.title"}}</h2></div></div>
+    {{range .MenteeDash.Tasks}}
       <article class="task-card status-border-{{.Status}}">
         <div class="item-head"><strong>{{.Title}}</strong><span class="status {{.Status}}">{{.Status}}</span></div>
         {{if .Detail}}<p>{{.Detail}}</p>{{end}}
         {{if .DueDate}}<p><span class="due-chip {{.DueState}}">{{$.T "room.due_chip"}} {{.DueDate}}</span></p>{{end}}
       </article>
     {{else}}
-      <div class="empty-inline action-empty"><strong>{{.T "learner.tasks.empty.title"}}</strong><p class="muted">{{.T "learner.tasks.empty.body"}}</p></div>
+      <div class="empty-inline action-empty"><strong>{{.T "mentee.tasks.empty.title"}}</strong><p class="muted">{{.T "mentee.tasks.empty.body"}}</p></div>
     {{end}}
   </section>
   <section class="panel">
-    <div class="section-head"><div><p class="eyebrow">{{.T "learner.rooms.eyebrow"}}</p><h2>{{.T "learner.rooms.title"}}</h2></div></div>
+    <div class="section-head"><div><p class="eyebrow">{{.T "mentee.rooms.eyebrow"}}</p><h2>{{.T "mentee.rooms.title"}}</h2></div></div>
     <div class="mini-room-list">
-      {{range .LearnerDash.Rooms}}<a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{$.RoleLabel .Mode .Role}} · {{$.ModeLabel .Mode}}</span></a>{{else}}<div class="empty-inline"><strong>{{$.T "learner.rooms.empty.title"}}</strong><p class="muted">{{$.T "learner.rooms.empty.body"}}</p></div>{{end}}
+      {{range .MenteeDash.Rooms}}<a href="/rooms/{{.ID}}"><strong>{{.Name}}</strong><span>{{$.RoleLabel .Mode .Role}} · {{$.ModeLabel .Mode}}</span></a>{{else}}<div class="empty-inline"><strong>{{$.T "mentee.rooms.empty.title"}}</strong><p class="muted">{{$.T "mentee.rooms.empty.body"}}</p></div>{{end}}
     </div>
   </section>
 </div>
 
 <section class="panel">
-  <div class="section-head"><div><p class="eyebrow">{{.T "learner.reports.eyebrow"}}</p><h2>{{.T "learner.reports.title"}}</h2></div></div>
-  {{range .LearnerDash.RecentReports}}
+  <div class="section-head"><div><p class="eyebrow">{{.T "mentee.reports.eyebrow"}}</p><h2>{{.T "mentee.reports.title"}}</h2></div></div>
+  {{range .MenteeDash.RecentReports}}
     <article class="report-card {{if .Blocker}}has-blocker{{end}}">
       <div class="item-head"><div><strong>{{.Author}}</strong><p class="muted">{{.CreatedAt}}</p></div><span class="comment-link">{{$.Tf "room.comments" .Comments}}</span></div>
       {{if .Blocker}}<p class="blocker">{{$.Tf "room.blocker.label" .Blocker}}</p>{{end}}
       <p>{{.Learned}}</p>
     </article>
   {{else}}
-    <div class="empty-inline"><strong>{{.T "learner.reports.empty.title"}}</strong><p class="muted">{{.T "learner.reports.empty.body"}}</p></div>
+    <div class="empty-inline"><strong>{{.T "mentee.reports.empty.title"}}</strong><p class="muted">{{.T "mentee.reports.empty.body"}}</p></div>
   {{end}}
 </section>
 {{template "layout_end" .}}{{end}}
@@ -320,7 +320,7 @@
   <div>
     <a class="back-link" href="/">{{.T "room.back.all"}}</a>
     <h1>{{.Room.Name}}</h1>
-    <p class="muted">{{if and (eq .Room.Role "mentor") (eq .Room.Mode "classroom")}}{{.T "room.lede.mentor.classroom"}}{{else if eq .Room.Role "mentor"}}{{.T "room.lede.mentor.mentorship"}}{{else if eq .Room.Mode "classroom"}}{{.T "room.lede.learner.classroom"}}{{else}}{{.T "room.lede.learner.mentorship"}}{{end}}</p>
+    <p class="muted">{{if and (eq .Room.Role "mentor") (eq .Room.Mode "classroom")}}{{.T "room.lede.mentor.classroom"}}{{else if eq .Room.Role "mentor"}}{{.T "room.lede.mentor.mentorship"}}{{else if eq .Room.Mode "classroom"}}{{.T "room.lede.mentee.classroom"}}{{else}}{{.T "room.lede.mentee.mentorship"}}{{end}}</p>
   </div>
   <div class="hero-actions">
     <span class="pill role-pill">{{.RoleLabel .Room.Mode .Room.Role}}</span>
@@ -331,7 +331,7 @@
 
 {{if and (eq .Room.Role "mentor") (eq .Room.Mode "classroom")}}
 <section class="stats">
-  <div class="stat-card neutral"><span>{{.T "room.classroom.stats.students"}}</span><strong>{{len .RoomLearners}}</strong></div>
+  <div class="stat-card neutral"><span>{{.T "room.classroom.stats.students"}}</span><strong>{{len .RoomMentees}}</strong></div>
   <div class="stat-card good"><span>{{.T "room.classroom.stats.assignments"}}</span><strong>{{len .Assignments}}</strong></div>
   <div class="stat-card warn"><span>{{.T "room.classroom.stats.submissions"}}</span><strong>{{len .Submissions}}</strong></div>
   <div class="stat-card danger"><span>{{.T "room.classroom.stats.need_review"}}</span><strong>{{.PendingReviews}}</strong></div>
@@ -345,14 +345,14 @@
   <div class="priority-grid">
     <a href="#assignments"><strong>{{len .Assignments}}</strong><span>{{.T "room.classroom.queue.published"}}</span></a>
     <a href="#submissions"><strong>{{len .Submissions}}</strong><span>{{.T "room.classroom.queue.received"}}</span></a>
-    <a href="#invite"><strong>{{len .RoomLearners}}</strong><span>{{.T "room.classroom.queue.enrolled"}}</span></a>
+    <a href="#invite"><strong>{{len .RoomMentees}}</strong><span>{{.T "room.classroom.queue.enrolled"}}</span></a>
   </div>
 </section>
 {{else if eq .Room.Role "mentor"}}
 <section class="stats">
   <div class="stat-card danger"><span>{{.T "room.mentor.stats.blocked"}}</span><strong>{{.Stats.BlockedReports}}</strong></div>
   <div class="stat-card warn"><span>{{.T "room.mentor.stats.waiting"}}</span><strong>{{.Stats.WaitingReports}}</strong></div>
-  <div class="stat-card neutral"><span>{{.T "room.mentor.stats.inactive"}}</span><strong>{{.Stats.InactiveLearners}}</strong></div>
+  <div class="stat-card neutral"><span>{{.T "room.mentor.stats.inactive"}}</span><strong>{{.Stats.InactiveMentees}}</strong></div>
   <div class="stat-card good"><span>{{.T "room.mentor.stats.open"}}</span><strong>{{.Stats.OpenTasks}}</strong></div>
 </section>
 
@@ -370,7 +370,7 @@
 {{end}}
 
 {{if eq .Room.Mode "classroom"}}
-{{if eq .Room.Role "learner"}}
+{{if eq .Room.Role "mentee"}}
 <div class="dashboard-grid">
   <section class="panel primary-panel classroom-panel">
     <div class="section-head">
@@ -472,7 +472,7 @@
       <article class="assignment-card compact-card">
         <div class="item-head">
           <div><strong>{{.Title}}</strong><p class="muted">{{$.Tf "room.due" .DueDate}}</p></div>
-          <span class="pill">{{$.Tf "room.classroom.published.fraction" .Submitted .TotalLearners}}</span>
+          <span class="pill">{{$.Tf "room.classroom.published.fraction" .Submitted .TotalMentees}}</span>
         </div>
         <p>{{.Instructions}}</p>
         {{if .ResourceURL}}<p class="report-actions"><a href="{{.ResourceURL}}" rel="noreferrer" target="_blank">{{$.T "room.open_resource"}}</a></p>{{end}}
@@ -494,7 +494,7 @@
     <form hx-post="/rooms/{{.Room.ID}}/invites" hx-target="#invite-result" method="post" class="inline">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <select name="role">
-        <option value="learner">{{.T "room.invite.option.student"}}</option>
+        <option value="mentee">{{.T "room.invite.option.student"}}</option>
         <option value="mentor">{{.T "room.invite.option.teacher"}}</option>
       </select>
       <button type="submit">{{.T "room.invite.submit"}}</button>
@@ -526,7 +526,7 @@
 {{end}}
 
 {{else}}
-{{if eq .Room.Role "learner"}}
+{{if eq .Room.Role "mentee"}}
 <div class="dashboard-grid">
   <section class="panel primary-panel checkin-panel">
     <div class="section-head">
@@ -578,7 +578,7 @@
           </form>
         {{end}}
       </article>
-    {{else}}<div class="empty-inline action-empty"><strong>{{.T "room.tasks.empty.learner.title"}}</strong><p class="muted">{{.T "room.tasks.empty.learner.body"}}</p></div>{{end}}
+    {{else}}<div class="empty-inline action-empty"><strong>{{.T "room.tasks.empty.mentee.title"}}</strong><p class="muted">{{.T "room.tasks.empty.mentee.body"}}</p></div>{{end}}
   </section>
 </div>
 {{else}}
@@ -660,7 +660,7 @@
     <form hx-post="/rooms/{{.Room.ID}}/invites" hx-target="#invite-result" method="post" class="inline">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <select name="role">
-        <option value="learner">{{.T "room.invite.option.learner"}}</option>
+        <option value="mentee">{{.T "room.invite.option.mentee"}}</option>
         <option value="mentor">{{.T "room.invite.option.mentor"}}</option>
       </select>
       <button type="submit">{{.T "room.invite.submit"}}</button>
@@ -675,13 +675,13 @@
         <h2>{{.T "room.assign.title"}}</h2>
       </div>
     </div>
-    {{if .RoomLearners}}
+    {{if .RoomMentees}}
     <form method="post" action="/rooms/{{.Room.ID}}/tasks" class="stack">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <label>{{.T "form.assignee"}}
         <select name="assigned_to" required>
-          <option value="all">{{.Tf "room.assign.all" (len .RoomLearners)}}</option>
-          {{range .RoomLearners}}<option value="{{.UserID}}">{{.Name}}</option>{{end}}
+          <option value="all">{{.Tf "room.assign.all" (len .RoomMentees)}}</option>
+          {{range .RoomMentees}}<option value="{{.UserID}}">{{.Name}}</option>{{end}}
         </select>
       </label>
       <label>{{.T "form.title"}} <input name="title" required></label>
@@ -753,7 +753,7 @@
 </section>
 {{end}}
 
-{{if eq .Room.Role "learner"}}
+{{if eq .Room.Role "mentee"}}
 <section class="panel" id="my-progress">
   <div class="section-head">
     <div>
@@ -783,7 +783,7 @@
   <div class="section-head">
     <div>
       <p class="eyebrow">{{.T "room.reports.eyebrow.timeline"}}</p>
-      <h2>{{.T "room.reports.title.learner"}}</h2>
+      <h2>{{.T "room.reports.title.mentee"}}</h2>
     </div>
   </div>
   {{range .Reports}}
@@ -802,7 +802,7 @@
         <a href="/rooms/{{$.Room.ID}}/reports/{{.ID}}">{{$.T "room.review_report"}}</a>
       </div>
     </article>
-  {{else}}<div class="empty-inline"><strong>{{.T "room.reports.empty.learner.title"}}</strong><p class="muted">{{.T "room.reports.empty.learner.body"}}</p></div>{{end}}
+  {{else}}<div class="empty-inline"><strong>{{.T "room.reports.empty.mentee.title"}}</strong><p class="muted">{{.T "room.reports.empty.mentee.body"}}</p></div>{{end}}
 </section>
 {{end}}
 {{end}}
@@ -922,12 +922,12 @@
 </section>
 
 <section class="panel help-section">
-  <div class="section-head"><div><p class="eyebrow">{{.T "help.learner.eyebrow"}}</p><h2>{{.T "help.learner.title"}}</h2></div></div>
+  <div class="section-head"><div><p class="eyebrow">{{.T "help.mentee.eyebrow"}}</p><h2>{{.T "help.mentee.title"}}</h2></div></div>
   <ol class="help-steps">
-    <li>{{.T "help.learner.s1"}}</li>
-    <li>{{.T "help.learner.s2"}}</li>
-    <li>{{.T "help.learner.s3"}}</li>
-    <li>{{.T "help.learner.s4"}}</li>
+    <li>{{.T "help.mentee.s1"}}</li>
+    <li>{{.T "help.mentee.s2"}}</li>
+    <li>{{.T "help.mentee.s3"}}</li>
+    <li>{{.T "help.mentee.s4"}}</li>
   </ol>
 </section>
 

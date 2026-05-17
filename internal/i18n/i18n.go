@@ -180,11 +180,11 @@ func RoleLabel(lang Lang, mode, role string) string {
 			return T(lang, "role.teacher")
 		}
 		return T(lang, "role.mentor")
-	case "learner":
+	case "mentee":
 		if classroom {
 			return T(lang, "role.student")
 		}
-		return T(lang, "role.learner")
+		return T(lang, "role.mentee")
 	}
 	return role
 }
