@@ -105,22 +105,3 @@ func (t *TelegramNotifier) NotifyEngagement(ctx context.Context, to Recipient, e
 	return nil
 }
 
-func (t *TelegramNotifier) NotifyAssignmentDue(ctx context.Context, to Recipient, rem domain.AssignmentReminder) error {
-	if !t.Configured() {
-		log.Print("telegram notifier not configured (SINAU_TELEGRAM_BOT_TOKEN unset); routing to fallback")
-		return t.fallback.NotifyAssignmentDue(ctx, to, rem)
-	}
-	if to.Telegram == "" {
-		log.Printf("recipient user=%s opted for telegram but no telegram_chat_id on file; routing to fallback", to.UserID)
-		return t.fallback.NotifyAssignmentDue(ctx, to, rem)
-	}
-	lang := i18n.Lang(to.Language)
-	if !i18n.IsValid(lang) {
-		lang = i18n.Default
-	}
-	body := i18n.Tf(lang, "notif.assignment_due.short", rem.Title, rem.RoomName, rem.DueDate)
-	log.Printf("[stub] telegram would send kind=assignment to=%s lang=%s body=%q",
-		to.Telegram, lang, body)
-	_ = t.client
-	return nil
-}

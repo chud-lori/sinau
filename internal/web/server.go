@@ -68,7 +68,6 @@ type PageData struct {
 	Report               domain.Report
 	Comments             []domain.Comment
 	Tasks                []domain.Task
-	Assignments          []domain.Assignment
 	Submissions          []domain.Submission
 	PendingReviews       int
 	Invites              []domain.Invite
@@ -83,7 +82,6 @@ type PageData struct {
 	MenteeDash           domain.MenteeDashboard
 	Prefs                domain.NotificationPrefs
 	Task                 domain.Task
-	Assignment           domain.Assignment
 	Profile              *domain.User
 	SessionCount         int
 	SearchQuery          string
@@ -159,16 +157,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /rooms/{roomID}/reports/{reportID}/comments/{commentID}/edit", s.auth(s.editComment))
 	mux.HandleFunc("POST /rooms/{roomID}/reports/{reportID}/comments/{commentID}/delete", s.auth(s.deleteComment))
 	mux.HandleFunc("POST /rooms/{roomID}/tasks", s.auth(s.createTask))
-	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/status", s.auth(s.updateTask))
-	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/review", s.auth(s.reviewTask))
+	mux.HandleFunc("GET /rooms/{roomID}/tasks/{taskID}", s.auth(s.taskPage))
+	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/submit", s.auth(s.submitTask))
 	mux.HandleFunc("GET /rooms/{roomID}/tasks/{taskID}/edit", s.auth(s.editTaskForm))
 	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/edit", s.auth(s.editTask))
 	mux.HandleFunc("POST /rooms/{roomID}/tasks/{taskID}/delete", s.auth(s.deleteTask))
-	mux.HandleFunc("POST /rooms/{roomID}/assignments", s.auth(s.createAssignment))
-	mux.HandleFunc("GET /rooms/{roomID}/assignments/{assignmentID}/edit", s.auth(s.editAssignmentForm))
-	mux.HandleFunc("POST /rooms/{roomID}/assignments/{assignmentID}/edit", s.auth(s.editAssignment))
-	mux.HandleFunc("POST /rooms/{roomID}/assignments/{assignmentID}/delete", s.auth(s.deleteAssignment))
-	mux.HandleFunc("POST /rooms/{roomID}/assignments/{assignmentID}/submissions", s.auth(s.submitAssignment))
 	mux.HandleFunc("POST /rooms/{roomID}/submissions/{submissionID}/review", s.auth(s.reviewSubmission))
 	mux.HandleFunc("POST /rooms/{roomID}/settings", s.auth(s.updateRoomSettings))
 	mux.HandleFunc("GET /profile", s.auth(s.profilePage))
@@ -306,19 +299,27 @@ func safeReturnPath(p string) string {
 	return p
 }
 
-// normalizeSubmissionScore validates and canonicalises the score input on
-// classroom submission reviews. An empty value (the teacher chose not to
-// score) is allowed. Otherwise it must be an integer in [0, 100]; the
-// returned string is the trimmed integer form, so storage stays
-// consistent regardless of leading zeros or whitespace.
-func normalizeSubmissionScore(raw string) (string, bool) {
+// normalizeScore validates and canonicalises a review score against the
+// room's mode. Classroom uses 0–100 (gradebook); mentorship uses 1–5
+// (leaderboard rubric). An empty value is allowed in either mode —
+// the mentor may want to leave feedback without a grade.
+func normalizeScore(raw, mode string) (string, bool) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
 		return "", true
 	}
 	n, err := strconv.Atoi(s)
-	if err != nil || n < 0 || n > 100 {
+	if err != nil {
 		return "", false
+	}
+	if mode == domain.RoomModeMentorship {
+		if n < 1 || n > 5 {
+			return "", false
+		}
+	} else {
+		if n < 0 || n > 100 {
+			return "", false
+		}
 	}
 	return strconv.Itoa(n), true
 }
@@ -655,9 +656,8 @@ func (s *Server) roomPage(w http.ResponseWriter, r *http.Request) {
 	pd.RoomMentees = mentees
 	pd.Reports = data.Reports
 	pd.Tasks = data.Tasks
-	pd.Assignments = data.Classroom.Assignments
-	pd.Submissions = data.Classroom.Submissions
-	pd.PendingReviews = data.Classroom.PendingReviews
+	pd.Submissions = data.Submissions
+	pd.PendingReviews = data.PendingReviews
 	pd.Invites = data.Invites
 	pd.Stats = data.Stats
 	pd.MyPoints = data.MyPoints
@@ -822,26 +822,52 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/rooms/"+roomID+"/reports/"+reportID, http.StatusSeeOther)
 }
 
-// assignAllSentinel is the form value used to mean "create one task per
-// mentee in this room". It is intentionally not a valid 32-char hex user
-// ID so it can never collide with a real assignee.
+// assignAllSentinel is the form value used in mentorship rooms to mean
+// "broadcast to every mentee in this room". On the wire it maps to an
+// empty `assigned_to` column. Classroom rooms always send this sentinel
+// since assignments are always broadcast there.
 const assignAllSentinel = "all"
 
+// createTask is the unified create endpoint for both mentorship tasks
+// and classroom assignments. The two flavours differ in defaults and
+// in what gets validated:
+//
+//   - mentorship: assignedTo is a specific mentee, OR "all" for a
+//     broadcast. detail is optional, resource_url is optional.
+//   - classroom: assigned_to is always "all" (every student gets it);
+//     detail (instructions) is required.
+//
+// The underlying row is the same.
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	u := current(r)
 	roomID := r.PathValue("roomID")
-	_, role, ok := s.store.RoomAccess(roomID, u.ID)
+	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
 	if !ok || role != domain.RoleMentor {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	assignedTo := r.FormValue("assigned_to")
 	title := auth.Clean(r.FormValue("title"), 180)
-	detail := auth.Clean(r.FormValue("detail"), 1200)
+	detail := auth.Clean(r.FormValue("detail"), 2000)
+	resourceURL := auth.Clean(r.FormValue("resource_url"), 400)
 	dueDate := auth.Clean(r.FormValue("due_date"), 10)
 	if title == "" {
-		http.Error(w, "task title required", http.StatusBadRequest)
+		http.Error(w, "title required", http.StatusBadRequest)
 		return
+	}
+	if rm.Mode == domain.RoomModeClassroom {
+		// Classroom mode treats every task as a broadcast and
+		// requires instructions + a deadline — those are gradebook-
+		// material defaults, not just convention.
+		assignedTo = assignAllSentinel
+		if detail == "" {
+			http.Error(w, "instructions required", http.StatusBadRequest)
+			return
+		}
+		if dueDate == "" {
+			http.Error(w, "deadline required", http.StatusBadRequest)
+			return
+		}
 	}
 	if dueDate != "" {
 		if _, err := time.Parse("2006-01-02", dueDate); err != nil {
@@ -849,115 +875,78 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if assignedTo == assignAllSentinel {
-		count, err := s.store.CreateTaskForMentees(roomID, u.ID, title, detail, dueDate)
-		if err != nil {
-			s.serverError(w, err)
-			return
-		}
-		if count == 0 {
-			http.Error(w, "no mentees in this room to assign", http.StatusBadRequest)
-			return
-		}
-	} else {
-		if !s.store.IsMentee(roomID, assignedTo) {
-			http.Error(w, "assignee must be a mentee in this room", http.StatusBadRequest)
-			return
-		}
-		if err := s.store.CreateTask(roomID, assignedTo, u.ID, title, detail, dueDate); err != nil {
-			s.serverError(w, err)
-			return
-		}
-	}
-	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
-}
-
-func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
-	u := current(r)
-	roomID, taskID := r.PathValue("roomID"), r.PathValue("taskID")
-	_, role, ok := s.store.RoomAccess(roomID, u.ID)
-	if !ok {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	status := r.FormValue("status")
-	if status != "todo" && status != "doing" && status != "done" {
-		http.Error(w, "bad status", http.StatusBadRequest)
-		return
-	}
-	updated, err := s.store.UpdateTaskStatus(roomID, taskID, u.ID, role, status)
-	if err != nil {
-		s.serverError(w, err)
-		return
-	}
-	if !updated {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
-}
-
-func (s *Server) reviewTask(w http.ResponseWriter, r *http.Request) {
-	u := current(r)
-	roomID, taskID := r.PathValue("roomID"), r.PathValue("taskID")
-	_, role, ok := s.store.RoomAccess(roomID, u.ID)
-	if !ok || role != domain.RoleMentor {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	points, err := strconv.Atoi(r.FormValue("points"))
-	if err != nil || points < 1 || points > 5 {
-		http.Error(w, "score must be an integer 1-5", http.StatusBadRequest)
-		return
-	}
-	awarded, err := s.store.ReviewTask(roomID, taskID, u.ID, points)
-	if err != nil {
-		s.serverError(w, err)
-		return
-	}
-	if !awarded {
-		http.Error(w, "task is not awaiting review", http.StatusConflict)
-		return
-	}
-	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
-}
-
-func (s *Server) createAssignment(w http.ResponseWriter, r *http.Request) {
-	u := current(r)
-	roomID := r.PathValue("roomID")
-	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
-	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	title := auth.Clean(r.FormValue("title"), 180)
-	instructions := auth.Clean(r.FormValue("instructions"), 2000)
-	resourceURL := auth.Clean(r.FormValue("resource_url"), 400)
-	dueDate := auth.Clean(r.FormValue("due_date"), 10)
-	if title == "" || instructions == "" || dueDate == "" {
-		http.Error(w, "title, instructions, and deadline are required", http.StatusBadRequest)
-		return
-	}
-	if _, err := time.Parse("2006-01-02", dueDate); err != nil {
-		http.Error(w, "deadline must use YYYY-MM-DD", http.StatusBadRequest)
-		return
-	}
 	if resourceURL != "" && !auth.ValidExternalURL(resourceURL) {
 		http.Error(w, "resource link must be an http or https URL", http.StatusBadRequest)
 		return
 	}
-	if _, err := s.store.CreateAssignment(roomID, u.ID, title, instructions, resourceURL, dueDate); err != nil {
+	storedAssignee := ""
+	if assignedTo != assignAllSentinel {
+		if !s.store.IsMentee(roomID, assignedTo) {
+			http.Error(w, "assignee must be a mentee in this room", http.StatusBadRequest)
+			return
+		}
+		storedAssignee = assignedTo
+	}
+	if _, err := s.store.CreateTask(roomID, u.ID, storedAssignee, title, detail, resourceURL, dueDate); err != nil {
 		s.serverError(w, err)
 		return
 	}
 	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
 }
 
-func (s *Server) submitAssignment(w http.ResponseWriter, r *http.Request) {
+// taskPage renders the unified task detail view — the mentee/student
+// submission form, or the mentor/teacher review queue summary. The
+// page is the canonical place to attach work to a specific task.
+func (s *Server) taskPage(w http.ResponseWriter, r *http.Request) {
 	u := current(r)
-	roomID, assignmentID := r.PathValue("roomID"), r.PathValue("assignmentID")
+	roomID, taskID := r.PathValue("roomID"), r.PathValue("taskID")
 	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
-	if !ok || role != domain.RoleMentee || rm.Mode != domain.RoomModeClassroom {
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	t, err := s.store.TaskByID(roomID, taskID, u.ID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	// Mentees only see broadcast tasks or tasks individually assigned
+	// to them.
+	if role != domain.RoleMentor && t.AssigneeID != "" && t.AssigneeID != u.ID {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	rm.Role = role
+	pd := s.pageData(r, "title.task")
+	pd.Room = rm
+	pd.Task = t
+	if role == domain.RoleMentor {
+		subs, err := s.store.TaskSubmissions(roomID)
+		if err != nil {
+			s.serverError(w, err)
+			return
+		}
+		// Filter to just this task's submissions for the review view.
+		filtered := subs[:0]
+		for _, sub := range subs {
+			if sub.TaskID == taskID {
+				filtered = append(filtered, sub)
+			}
+		}
+		pd.Submissions = filtered
+	}
+	s.render(w, "task_page", pd)
+}
+
+// submitTask is the unified student-submits-work endpoint, replacing
+// the old per-mode submitAssignment / updateTaskStatus pair. It writes
+// (or replaces) the student's task_submissions row plus its links and
+// fires an engagement notification to the room's mentors.
+func (s *Server) submitTask(w http.ResponseWriter, r *http.Request) {
+	u := current(r)
+	roomID, taskID := r.PathValue("roomID"), r.PathValue("taskID")
+	_, role, ok := s.store.RoomAccess(roomID, u.ID)
+	if !ok || role != domain.RoleMentee {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -974,22 +963,28 @@ func (s *Server) submitAssignment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "at least one submission link is required", http.StatusBadRequest)
 		return
 	}
-	note := auth.Clean(r.FormValue("note"), 1600)
-	if err := s.store.SubmitAssignment(roomID, assignmentID, u.ID, note, links); err != nil {
+	note := auth.Clean(r.FormValue("note"), 2000)
+	if err := s.store.SubmitTask(roomID, taskID, u.ID, note, links); err != nil {
 		s.serverError(w, err)
 		return
 	}
-	if a, err := s.store.AssignmentByID(roomID, assignmentID); err == nil {
-		s.dispatchSubmissionMade(u, roomID, a.Title)
+	// Engagement notification to mentors: read the task's title for
+	// the email subject.
+	if t, err := s.store.TaskByID(roomID, taskID, u.ID); err == nil {
+		s.dispatchSubmissionMade(u, roomID, t.Title)
 	}
-	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+	http.Redirect(w, r, "/rooms/"+roomID+"/tasks/"+taskID, http.StatusSeeOther)
 }
 
+// reviewSubmission is the unified mentor-reviews-work endpoint. The
+// score is validated per-mode (1–5 in mentorship → leaderboard;
+// 0–100 in classroom → gradebook only). The store handles the
+// points_ledger insert atomically when applicable.
 func (s *Server) reviewSubmission(w http.ResponseWriter, r *http.Request) {
 	u := current(r)
 	roomID, submissionID := r.PathValue("roomID"), r.PathValue("submissionID")
 	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
-	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
+	if !ok || role != domain.RoleMentor {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -999,16 +994,20 @@ func (s *Server) reviewSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	feedback := auth.Clean(r.FormValue("feedback"), 2000)
-	score, ok := normalizeSubmissionScore(r.FormValue("score"))
-	if !ok {
-		http.Error(w, "score must be empty or an integer 0-100", http.StatusBadRequest)
+	score, valid := normalizeScore(r.FormValue("score"), rm.Mode)
+	if !valid {
+		if rm.Mode == domain.RoomModeMentorship {
+			http.Error(w, "score must be empty or an integer 1-5", http.StatusBadRequest)
+		} else {
+			http.Error(w, "score must be empty or an integer 0-100", http.StatusBadRequest)
+		}
 		return
 	}
 	if status == "revise" && feedback == "" {
 		http.Error(w, "revision feedback is required", http.StatusBadRequest)
 		return
 	}
-	updated, err := s.store.ReviewSubmission(roomID, submissionID, status, feedback, score)
+	updated, err := s.store.ReviewTaskSubmission(roomID, submissionID, status, feedback, score, u.ID)
 	if err != nil {
 		s.serverError(w, err)
 		return
@@ -1017,8 +1016,8 @@ func (s *Server) reviewSubmission(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if studentID, assignmentTitle, err := s.store.SubmissionContext(submissionID); err == nil {
-		s.dispatchFeedbackPosted(studentID, roomID, assignmentTitle, feedback, score)
+	if studentID, taskTitle, _, err := s.store.SubmissionContext(submissionID); err == nil {
+		s.dispatchFeedbackPosted(studentID, roomID, taskTitle, feedback, score)
 	}
 	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
 }
@@ -1476,7 +1475,7 @@ func (s *Server) editTaskForm(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	t, err := s.store.TaskByID(roomID, taskID)
+	t, err := s.store.TaskByID(roomID, taskID, u.ID)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -1491,16 +1490,21 @@ func (s *Server) editTaskForm(w http.ResponseWriter, r *http.Request) {
 func (s *Server) editTask(w http.ResponseWriter, r *http.Request) {
 	u := current(r)
 	roomID, taskID := r.PathValue("roomID"), r.PathValue("taskID")
-	_, role, ok := s.store.RoomAccess(roomID, u.ID)
+	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
 	if !ok || role != domain.RoleMentor {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	title := auth.Clean(r.FormValue("title"), 180)
-	detail := auth.Clean(r.FormValue("detail"), 1200)
+	detail := auth.Clean(r.FormValue("detail"), 2000)
+	resourceURL := auth.Clean(r.FormValue("resource_url"), 400)
 	dueDate := auth.Clean(r.FormValue("due_date"), 10)
 	if title == "" {
-		http.Error(w, "task title required", http.StatusBadRequest)
+		http.Error(w, "title required", http.StatusBadRequest)
+		return
+	}
+	if rm.Mode == domain.RoomModeClassroom && (detail == "" || dueDate == "") {
+		http.Error(w, "instructions and deadline required for classroom assignments", http.StatusBadRequest)
 		return
 	}
 	if dueDate != "" {
@@ -1509,16 +1513,20 @@ func (s *Server) editTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	updated, err := s.store.UpdateTask(taskID, title, detail, dueDate)
+	if resourceURL != "" && !auth.ValidExternalURL(resourceURL) {
+		http.Error(w, "resource link must be an http or https URL", http.StatusBadRequest)
+		return
+	}
+	updated, err := s.store.UpdateTask(taskID, title, detail, resourceURL, dueDate)
 	if err != nil {
 		s.serverError(w, err)
 		return
 	}
 	if !updated {
-		http.Error(w, "task is not editable (already reviewed or removed)", http.StatusConflict)
+		http.NotFound(w, r)
 		return
 	}
-	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
+	http.Redirect(w, r, "/rooms/"+roomID+"/tasks/"+taskID, http.StatusSeeOther)
 }
 
 func (s *Server) deleteTask(w http.ResponseWriter, r *http.Request) {
@@ -1536,87 +1544,14 @@ func (s *Server) deleteTask(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
 }
 
-func (s *Server) editAssignmentForm(w http.ResponseWriter, r *http.Request) {
-	u := current(r)
-	roomID, assignmentID := r.PathValue("roomID"), r.PathValue("assignmentID")
-	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
-	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	a, err := s.store.AssignmentByID(roomID, assignmentID)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	rm.Role = role
-	pd := s.pageData(r, "title.assignment.edit")
-	pd.Room = rm
-	pd.Assignment = a
-	s.render(w, "assignment_edit", pd)
-}
-
-func (s *Server) editAssignment(w http.ResponseWriter, r *http.Request) {
-	u := current(r)
-	roomID, assignmentID := r.PathValue("roomID"), r.PathValue("assignmentID")
-	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
-	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	title := auth.Clean(r.FormValue("title"), 180)
-	instructions := auth.Clean(r.FormValue("instructions"), 2000)
-	resourceURL := auth.Clean(r.FormValue("resource_url"), 400)
-	dueDate := auth.Clean(r.FormValue("due_date"), 10)
-	if title == "" || instructions == "" || dueDate == "" {
-		http.Error(w, "title, instructions, and deadline are required", http.StatusBadRequest)
-		return
-	}
-	if _, err := time.Parse("2006-01-02", dueDate); err != nil {
-		http.Error(w, "deadline must use YYYY-MM-DD", http.StatusBadRequest)
-		return
-	}
-	if resourceURL != "" && !auth.ValidExternalURL(resourceURL) {
-		http.Error(w, "resource link must be an http or https URL", http.StatusBadRequest)
-		return
-	}
-	updated, err := s.store.UpdateAssignment(assignmentID, title, instructions, resourceURL, dueDate)
-	if err != nil {
-		s.serverError(w, err)
-		return
-	}
-	if !updated {
-		http.NotFound(w, r)
-		return
-	}
-	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
-}
-
-func (s *Server) deleteAssignment(w http.ResponseWriter, r *http.Request) {
-	u := current(r)
-	roomID, assignmentID := r.PathValue("roomID"), r.PathValue("assignmentID")
-	rm, role, ok := s.store.RoomAccess(roomID, u.ID)
-	if !ok || role != domain.RoleMentor || rm.Mode != domain.RoomModeClassroom {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	if _, err := s.store.DeleteAssignment(assignmentID); err != nil {
-		s.serverError(w, err)
-		return
-	}
-	http.Redirect(w, r, "/rooms/"+roomID, http.StatusSeeOther)
-}
-
-// onboardingPage renders the first-run explainer for users who haven't
-// yet been stamped with `onboarded_at`. The page itself doesn't gate
-// anything — it always offers a Skip action that just marks the user
-// onboarded and redirects to /.
+// onboardingPage renders the first-run explainer. It's intercepted as
+// the home redirect target for users without `onboarded_at`, but
+// remains viewable at any time afterwards (the help page links to it)
+// so users can re-read the tour. Visiting it does NOT re-set the
+// onboarded flag, and the "Skip" button on the page only stamps
+// onboarded_at for fresh accounts.
 func (s *Server) onboardingPage(w http.ResponseWriter, r *http.Request) {
 	u := current(r)
-	if u.Onboarded {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
-	}
 	pd := s.pageData(r, "title.onboarding")
 	pd.SetupNeeded = s.store.CanCreateRooms(u.ID)
 	s.render(w, "onboarding", pd)

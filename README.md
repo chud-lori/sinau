@@ -71,10 +71,12 @@ elsewhere on the instance.
 
 - **Progress reports + comments** (Mentorship), with edit and soft-delete
   by the author or the room's mentor
-- **Assignments + submissions** with 1–5 rubric and feedback (Classroom);
-  teachers can edit / remove published assignments
-- **Tasks** with deadlines and points; editable until the mentor has
-  reviewed them
+- **Tasks (Mentorship) / Assignments (Classroom)** — the same underlying
+  work item with mode-aware labels. Mentees attach submission links + a
+  note; mentors review with feedback and a score (1–5 in Mentorship —
+  rolls into the leaderboard; 0–100 in Classroom — gradebook). Mentors
+  can edit or remove tasks at any time; the timeline shows an "edited"
+  tag so the trail stays honest.
 - **Per-room leaderboards** — optional, off by default, mentors choose
   whether to make them visible to the room
 - **Deadline reminders** — opt-in per user; channels include email, with
@@ -87,6 +89,14 @@ elsewhere on the instance.
 - **Account self-service** at `/profile` — change name, email, language,
   password (revokes other sessions), and see / sign out other active
   sessions.
+- **First-run onboarding** — new users land on a one-screen explainer
+  with role-aware paths instead of an empty dashboard. Always skippable.
+- **Search** — full-text search across every report, comment, task, and
+  submission you can see, scoped automatically by room membership.
+  Highlighted snippets, live-as-you-type via htmx.
+- **Personal views** — `/me/growth` (your check-in rhythm, streak, task
+  completion, recurring topics), `/me/grades` (every classroom in one
+  place), `/me/coaching` (private self-metrics for mentors / teachers).
 - **Per-user notification settings** at `/settings`
 - **In-app help** at `/help` for both mentors/teachers and mentees/students
 
@@ -106,8 +116,11 @@ Sinau is a single Go binary with a SQLite file behind it. To poke at it
 locally:
 
 ```sh
-go run ./cmd/sinau
+make run
 ```
+
+(The `Makefile` sets the `sqlite_fts5` build tag the search feature
+needs. If you call `go run` directly, pass `-tags sqlite_fts5`.)
 
 Then open `http://127.0.0.1:8080`. The first time you load it, you'll be
 asked to create the bootstrap account.

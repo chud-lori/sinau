@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -70,14 +71,12 @@ func TestSchemaV1HasFinalShape(t *testing.T) {
 		{"comments", "deleted_at"},
 		{"tasks", "due_date"},
 		{"tasks", "last_reminded_at"},
-		{"tasks", "points_awarded"},
-		{"tasks", "reviewed_at"},
+		{"tasks", "resource_url"},
 		{"tasks", "edited_at"},
 		{"tasks", "deleted_at"},
-		{"assignments", "last_reminded_at"},
-		{"assignments", "edited_at"},
-		{"assignments", "deleted_at"},
-		{"submissions", "score"},
+		{"task_submissions", "score"},
+		{"task_submissions", "reviewed_by"},
+		{"task_submissions", "feedback"},
 		{"notification_prefs", "whatsapp_number"},
 		{"notification_prefs", "telegram_chat_id"},
 	} {
@@ -259,7 +258,7 @@ func TestMentorCanCreateMultipleRooms(t *testing.T) {
 	}
 }
 
-func TestClassroomAssignmentsCanBeSubmittedAndReviewed(t *testing.T) {
+func TestClassroomTaskCanBeSubmittedAndReviewed(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, _ := createUserRoom(t, st, "Mentor", "mentor@example.com")
 	roomID, err := st.CreateRoom("Data Science", mentorID, domain.RoomModeClassroom)
@@ -273,43 +272,48 @@ func TestClassroomAssignmentsCanBeSubmittedAndReviewed(t *testing.T) {
 	code := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
 	menteeID, _ := joinMentee(t, st, code, "Student", "student@example.com")
 
-	if _, err := st.CreateAssignment(roomID, mentorID, "Build notebook", "Train a small model", "https://docs.google.com/doc", "2026-06-01"); err != nil {
-		t.Fatal(err)
-	}
-	studentAssignments, err := st.Assignments(roomID, menteeID, domain.RoleMentee)
+	// Classroom tasks are always broadcast (assigned_to = "").
+	taskID, err := st.CreateTask(roomID, mentorID, "", "Build notebook", "Train a small model", "https://docs.google.com/doc", "2026-06-01")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(studentAssignments) != 1 || studentAssignments[0].MySubmissionStatus != "" {
-		t.Fatalf("expected one unsubmitted assignment, got %+v", studentAssignments)
-	}
-	if err := st.SubmitAssignment(roomID, studentAssignments[0].ID, menteeID, "Finished baseline", []domain.Link{{Label: "Notebook", URL: "https://colab.research.google.com/notebook"}}); err != nil {
+	studentTasks, err := st.Tasks(roomID, menteeID, domain.RoleMentee)
+	if err != nil {
 		t.Fatal(err)
 	}
-	submissions, err := st.Submissions(roomID)
+	if len(studentTasks) != 1 || studentTasks[0].MySubmissionStatus != "" {
+		t.Fatalf("expected one unsubmitted task, got %+v", studentTasks)
+	}
+	if err := st.SubmitTask(roomID, taskID, menteeID, "Finished baseline",
+		[]domain.Link{{Label: "Notebook", URL: "https://colab.research.google.com/notebook"}}); err != nil {
+		t.Fatal(err)
+	}
+	submissions, err := st.TaskSubmissions(roomID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(submissions) != 1 || submissions[0].Status != "submitted" || submissions[0].StudentName != "Student" {
 		t.Fatalf("expected submitted student work, got %+v", submissions)
 	}
-	updated, err := st.ReviewSubmission(roomID, submissions[0].ID, "reviewed", "Good baseline", "90")
+	updated, err := st.ReviewTaskSubmission(roomID, submissions[0].ID, "reviewed", "Good baseline", "90", mentorID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !updated {
 		t.Fatal("review did not update submission")
 	}
-	studentAssignments, err = st.Assignments(roomID, menteeID, domain.RoleMentee)
+	studentTasks, err = st.Tasks(roomID, menteeID, domain.RoleMentee)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if studentAssignments[0].MySubmissionStatus != "reviewed" || studentAssignments[0].MyScore != "90" {
-		t.Fatalf("mentee did not see review result: %+v", studentAssignments[0])
+	if studentTasks[0].MySubmissionStatus != "reviewed" || studentTasks[0].MyScore != "90" {
+		t.Fatalf("mentee did not see review result: %+v", studentTasks[0])
 	}
 }
 
-func TestCreateTaskForMenteesAssignsEveryMenteeOnce(t *testing.T) {
+// TestBroadcastTaskReachesEveryMenteeOnce — one CreateTask with
+// assigned_to="" must appear for every mentee, never to the mentor.
+func TestBroadcastTaskReachesEveryMenteeOnce(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
 	codeA := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
@@ -317,12 +321,12 @@ func TestCreateTaskForMenteesAssignsEveryMenteeOnce(t *testing.T) {
 	menteeA, _ := joinMentee(t, st, codeA, "Mentee A", "a@example.com")
 	menteeB, _ := joinMentee(t, st, codeB, "Mentee B", "b@example.com")
 
-	count, err := st.CreateTaskForMentees(roomID, mentorID, "Read RFC", "details", "")
+	taskID, err := st.CreateTask(roomID, mentorID, "", "Read RFC", "details", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 2 {
-		t.Fatalf("expected 2 tasks created, got %d", count)
+	if taskID == "" {
+		t.Fatal("expected task id from CreateTask")
 	}
 
 	tasksA, err := st.Tasks(roomID, menteeA, domain.RoleMentee)
@@ -336,31 +340,8 @@ func TestCreateTaskForMenteesAssignsEveryMenteeOnce(t *testing.T) {
 	if len(tasksA) != 1 || len(tasksB) != 1 {
 		t.Fatalf("expected exactly one task per mentee, got A=%d B=%d", len(tasksA), len(tasksB))
 	}
-	if tasksA[0].ID == tasksB[0].ID {
-		t.Fatal("bulk assign produced shared task ID across mentees")
-	}
-
-	// Mentor is not a mentee: bulk should never assign to mentor.
-	mentorTasks, err := st.Tasks(roomID, mentorID, domain.RoleMentor)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, tk := range mentorTasks {
-		if tk.Assignee == "Mentor" {
-			t.Fatalf("mentor received a task from bulk assign: %+v", tk)
-		}
-	}
-}
-
-func TestCreateTaskForMenteesIsZeroWhenNoMentees(t *testing.T) {
-	st := newTestStore(t)
-	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
-	count, err := st.CreateTaskForMentees(roomID, mentorID, "Read RFC", "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Fatalf("expected 0 tasks in mentor-only room, got %d", count)
+	if tasksA[0].ID != taskID || tasksB[0].ID != taskID {
+		t.Fatal("broadcast task should be the same row for every mentee")
 	}
 }
 
@@ -380,7 +361,10 @@ func TestIsMenteeRejectsMentorsAndOutsiders(t *testing.T) {
 	}
 }
 
-func TestTaskUpdateAuthorization(t *testing.T) {
+// TestIndividualTaskScopedToAssignee — a task assigned to menteeA must
+// not appear in menteeB's task list, and only the assigned mentee can
+// submit work against it.
+func TestIndividualTaskScopedToAssignee(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
 	codeA := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
@@ -388,30 +372,28 @@ func TestTaskUpdateAuthorization(t *testing.T) {
 	menteeA, _ := joinMentee(t, st, codeA, "Mentee A", "a@example.com")
 	menteeB, _ := joinMentee(t, st, codeB, "Mentee B", "b@example.com")
 
-	if err := st.CreateTask(roomID, menteeA, mentorID, "Read", "Read docs", ""); err != nil {
-		t.Fatal(err)
-	}
-	tasks, err := st.Tasks(roomID, menteeA, domain.RoleMentee)
+	taskID, err := st.CreateTask(roomID, mentorID, menteeA, "Read", "Read docs", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tasks) != 1 {
-		t.Fatalf("expected one task, got %d", len(tasks))
+	tasksA, err := st.Tasks(roomID, menteeA, domain.RoleMentee)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasksA) != 1 || tasksA[0].ID != taskID {
+		t.Fatalf("mentee A should see the task, got %+v", tasksA)
+	}
+	tasksB, err := st.Tasks(roomID, menteeB, domain.RoleMentee)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasksB) != 0 {
+		t.Fatalf("mentee B should not see another mentee's task, got %+v", tasksB)
 	}
 
-	updated, err := st.UpdateTaskStatus(roomID, tasks[0].ID, menteeB, domain.RoleMentee, "done")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated {
-		t.Fatal("mentee updated another mentee's task")
-	}
-	updated, err = st.UpdateTaskStatus(roomID, tasks[0].ID, mentorID, domain.RoleMentor, "done")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !updated {
-		t.Fatal("mentor could not update task")
+	// Submission by the wrong mentee must fail at the store boundary.
+	if err := st.SubmitTask(roomID, taskID, menteeB, "wrong", nil); err == nil {
+		t.Fatal("mentee B should not be able to submit a task assigned to mentee A")
 	}
 }
 
@@ -426,7 +408,7 @@ func TestMemberOpenTaskCountDoesNotMultiplyByReports(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := st.CreateTask(roomID, menteeID, mentorID, "One task", "detail", ""); err != nil {
+	if _, err := st.CreateTask(roomID, mentorID, menteeID, "One task", "detail", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	members, err := st.Members(roomID)
@@ -448,7 +430,7 @@ func TestTaskDueDateAndReminders(t *testing.T) {
 
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	dueSoon := now.Add(24 * time.Hour).Format("2006-01-02")
-	if err := st.CreateTask(roomID, menteeID, mentorID, "Due soon", "detail", dueSoon); err != nil {
+	if _, err := st.CreateTask(roomID, mentorID, menteeID, "Due soon", "detail", "", dueSoon); err != nil {
 		t.Fatal(err)
 	}
 	tasks, err := st.Tasks(roomID, menteeID, domain.RoleMentee)
@@ -478,31 +460,37 @@ func TestTaskDueDateAndReminders(t *testing.T) {
 	}
 }
 
-func TestReviewTaskAwardsPointsOnce(t *testing.T) {
+// TestReviewMentorshipSubmissionAwardsPointsOnce — submitting and
+// reviewing a mentorship task awards points to the ledger, and a second
+// review of the same (already-reviewed) submission is rejected so the
+// score can't be inflated by re-clicking.
+func TestReviewMentorshipSubmissionAwardsPointsOnce(t *testing.T) {
 	st := newTestStore(t)
 	mentorID, roomID := createUserRoom(t, st, "Mentor", "mentor@example.com")
 	code := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
 	menteeID, _ := joinMentee(t, st, code, "Mentee", "mentee@example.com")
 
-	if err := st.CreateTask(roomID, menteeID, mentorID, "Read RFC", "details", ""); err != nil {
+	taskID, err := st.CreateTask(roomID, mentorID, menteeID, "Read RFC", "details", "", "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, _ := st.Tasks(roomID, menteeID, domain.RoleMentee)
-	if len(tasks) != 1 {
-		t.Fatalf("want 1 task, got %d", len(tasks))
-	}
-	taskID := tasks[0].ID
 
-	// Cannot review a task that is not yet done.
-	if ok, err := st.ReviewTask(roomID, taskID, mentorID, 4); err != nil || ok {
-		t.Fatalf("review pre-done should not award (ok=%v err=%v)", ok, err)
-	}
-
-	// Mark done, then review.
-	if _, err := st.UpdateTaskStatus(roomID, taskID, menteeID, domain.RoleMentee, "done"); err != nil {
+	// Submit work and pick up the resulting submission row.
+	if err := st.SubmitTask(roomID, taskID, menteeID, "done reading",
+		[]domain.Link{{Label: "Notes", URL: "https://docs.example.com/x"}}); err != nil {
 		t.Fatal(err)
 	}
-	ok, err := st.ReviewTask(roomID, taskID, mentorID, 4)
+	subs, err := st.TaskSubmissions(roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("want 1 submission, got %d", len(subs))
+	}
+	subID := subs[0].ID
+
+	// First review awards points.
+	ok, err := st.ReviewTaskSubmission(roomID, subID, "reviewed", "good", "4", mentorID)
 	if err != nil || !ok {
 		t.Fatalf("first review should succeed (ok=%v err=%v)", ok, err)
 	}
@@ -510,22 +498,13 @@ func TestReviewTaskAwardsPointsOnce(t *testing.T) {
 		t.Fatalf("total points want 4, got %d", got)
 	}
 
-	// Second review must no-op (idempotent).
-	ok, err = st.ReviewTask(roomID, taskID, mentorID, 5)
+	// Re-reviewing an already-reviewed submission is rejected.
+	ok, err = st.ReviewTaskSubmission(roomID, subID, "reviewed", "bumped", "5", mentorID)
 	if err != nil || ok {
 		t.Fatalf("re-review should not award (ok=%v err=%v)", ok, err)
 	}
 	if got := st.UserPointsTotal(menteeID); got != 4 {
 		t.Fatalf("total points unchanged after re-review, got %d", got)
-	}
-
-	// Reviewed tasks lock status.
-	updated, err := st.UpdateTaskStatus(roomID, taskID, mentorID, domain.RoleMentor, "todo")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated {
-		t.Fatal("status change should be locked once reviewed")
 	}
 }
 
@@ -540,14 +519,29 @@ func TestRoomLeaderboardOrderAndRank(t *testing.T) {
 	menteeC, _ := joinMentee(t, st, codeC, "C", "c@example.com")
 
 	for who, pts := range map[string]int{menteeA: 5, menteeB: 3, menteeC: 5} {
-		if err := st.CreateTask(roomID, who, mentorID, "t", "", ""); err != nil {
+		taskID, err := st.CreateTask(roomID, mentorID, who, "t", "", "", "")
+		if err != nil {
 			t.Fatal(err)
 		}
-		tasks, _ := st.Tasks(roomID, who, domain.RoleMentee)
-		if _, err := st.UpdateTaskStatus(roomID, tasks[0].ID, who, domain.RoleMentee, "done"); err != nil {
+		if err := st.SubmitTask(roomID, taskID, who, "done", nil); err != nil {
 			t.Fatal(err)
 		}
-		if ok, err := st.ReviewTask(roomID, tasks[0].ID, mentorID, pts); err != nil || !ok {
+		subs, err := st.TaskSubmissions(roomID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var subID string
+		for _, s := range subs {
+			if s.TaskID == taskID {
+				subID = s.ID
+				break
+			}
+		}
+		if subID == "" {
+			t.Fatalf("submission not found for task %s", taskID)
+		}
+		score := strconv.Itoa(pts)
+		if ok, err := st.ReviewTaskSubmission(roomID, subID, "reviewed", "ok", score, mentorID); err != nil || !ok {
 			t.Fatalf("review failed user=%s err=%v ok=%v", who, err, ok)
 		}
 	}
@@ -631,7 +625,7 @@ func TestRoleDashboards(t *testing.T) {
 		t.Fatal(err)
 	}
 	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
-	if err := st.CreateTask(roomID, menteeID, mentorID, "Overdue task", "detail", yesterday); err != nil {
+	if _, err := st.CreateTask(roomID, mentorID, menteeID, "Overdue task", "detail", "", yesterday); err != nil {
 		t.Fatal(err)
 	}
 
@@ -736,22 +730,22 @@ func TestStudentGradesAggregatesAcrossClassrooms(t *testing.T) {
 	code := createInvite(t, st, roomID, mentorID, domain.RoleMentee)
 	studentID, _ := joinMentee(t, st, code, "S", "s@example.com")
 
-	// Past-deadline assignment so we can test "on time" math against a
-	// fresh submission (today vs deadline in the past).
-	asgnID, err := st.CreateAssignment(roomID, mentorID, "Quiz 1", "instructions", "", "2026-01-01")
+	// Past-deadline classroom task (broadcast — classroom is always
+	// broadcast) so we can exercise the "on time" math against a fresh
+	// submission (today vs deadline in the past).
+	taskID, err := st.CreateTask(roomID, mentorID, "", "Quiz 1", "instructions", "", "2026-01-01")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SubmitAssignment(roomID, asgnID, studentID, "done",
+	if err := st.SubmitTask(roomID, taskID, studentID, "done",
 		[]domain.Link{{Label: "Doc", URL: "https://docs.example.com/x"}}); err != nil {
 		t.Fatal(err)
 	}
-	// Find the submission ID to review with a score.
-	subs, err := st.Submissions(roomID)
+	subs, err := st.TaskSubmissions(roomID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.ReviewSubmission(roomID, subs[0].ID, "reviewed", "ok", "85"); err != nil {
+	if _, err := st.ReviewTaskSubmission(roomID, subs[0].ID, "reviewed", "ok", "85", mentorID); err != nil {
 		t.Fatal(err)
 	}
 

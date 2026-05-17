@@ -81,6 +81,28 @@ func (r Room) ModeLabel() string {
 	return r.Mode
 }
 
+// WorkLabel returns the room-appropriate label for the unified "task"
+// concept: "Task" in mentorship rooms, "Assignment" in classroom rooms.
+// The underlying data is the same; the label is purely a UX
+// affordance so each mode reads naturally to its audience.
+func (r Room) WorkLabel() string {
+	if r.Mode == RoomModeClassroom {
+		return "Assignment"
+	}
+	return "Task"
+}
+
+// ScoreMax returns the highest valid score for the room's mode.
+// Mentorship reviews use a 1–5 rubric (rolls into points_ledger);
+// classroom reviews use 0–100 (gradebook). The web layer reuses this
+// to validate teacher/mentor input and to render the score chip.
+func (r Room) ScoreMax() int {
+	if r.Mode == RoomModeClassroom {
+		return 100
+	}
+	return 5
+}
+
 const (
 	NotifChannelOff      = "off"
 	NotifChannelEmail    = "email"
@@ -166,21 +188,41 @@ type Comment struct {
 	EditedAt  string
 }
 
+// Task is the unified work-item used by both mentorship and classroom
+// rooms. AssigneeID = "" means the task is broadcast to every mentee in
+// the room (classroom mode is always like this; mentorship "assign to
+// all" lands here too). Status is derived per viewer from the matching
+// task_submissions row — Task itself carries no lifecycle column.
+//
+// MyXxx fields are populated when Tasks() is called by a mentee/student:
+// they describe the viewer's own submission so the dashboard can render
+// status pills without a second query per row.
 type Task struct {
 	ID            string
+	RoomID        string
+	CreatedByID   string
 	Title         string
 	Detail        string
-	Status        string
-	Assignee      string
-	AssigneeID    string
-	AssignedByID  string
+	ResourceURL   string
+	Assignee      string // human-readable; "" when broadcast
+	AssigneeID    string // "" when broadcast
 	DueDate       string
 	DueState      string
 	CreatedAt     string
 	EditedAt      string
-	PointsAwarded int
-	ReviewedAt    string
-	ReviewedBy    string
+
+	// Viewer-specific submission summary (mentee/student view). Empty
+	// strings mean "no submission yet"; status == 'reviewed' means
+	// the mentor/teacher has graded.
+	MySubmissionID    string
+	MySubmissionStatus string
+	MySubmissionLinks  []Link
+	MyFeedback         string
+	MyScore            string
+
+	// Mentor/teacher aggregate counts when the task is broadcast.
+	Submitted    int
+	TotalStudents int
 }
 
 type Invite struct {
@@ -190,43 +232,25 @@ type Invite struct {
 	UsedAt    sql.NullString
 }
 
-type Assignment struct {
-	ID                 string
-	RoomID             string
-	Title              string
-	Instructions       string
-	ResourceURL        string
-	DueDate            string
-	CreatedAt          string
-	EditedAt           string
-	Submitted          int
-	TotalMentees       int
-	MySubmissionStatus string
-	MySubmissionLinks  []Link
-	MyFeedback         string
-	MyScore            string
-}
-
+// Submission is one student's response to a task. Mentorship rooms have
+// a max of one submission per (task, mentee) pair; classroom rooms have
+// the same — the UNIQUE constraint enforces it. Resubmission overwrites
+// in place and clears the review state.
 type Submission struct {
-	ID              string
-	AssignmentID    string
-	AssignmentTitle string
-	StudentID       string
-	StudentName     string
-	StudentEmail    string
-	Links           []Link
-	Note            string
-	Status          string
-	Feedback        string
-	Score           string
-	SubmittedAt     string
-	ReviewedAt      string
-}
-
-type ClassroomData struct {
-	Assignments    []Assignment
-	Submissions    []Submission
-	PendingReviews int
+	ID          string
+	TaskID      string
+	TaskTitle   string
+	StudentID   string
+	StudentName string
+	StudentEmail string
+	Links       []Link
+	Note        string
+	Status      string
+	Feedback    string
+	Score       string
+	ReviewedBy  string
+	SubmittedAt string
+	ReviewedAt  string
 }
 
 // InvitePreview is the public-safe view of an invite, used to show the
@@ -279,6 +303,11 @@ type Stats struct {
 	OverdueTasks    int
 }
 
+// TaskReminder is one (task, recipient) pair the worker should ping
+// about an approaching deadline. Today this covers both mentorship
+// (individually-assigned tasks) and classroom (broadcast tasks fanned
+// out into one record per unsubmitted student); the worker dispatches
+// each row through the same notifier path.
 type TaskReminder struct {
 	TaskID           string
 	Title            string
@@ -286,40 +315,24 @@ type TaskReminder struct {
 	DueDate          string
 	RoomID           string
 	RoomName         string
+	RoomMode         string
 	AssigneeID       string
 	AssigneeName     string
 	AssigneeEmail    string
 	AssigneeLanguage string
 }
 
-// AssignmentReminder is a single (assignment, mentee) pair the worker
-// should ping about an approaching classroom deadline. The store query
-// fans an assignment out into one record per mentee who has not yet
-// submitted, so the worker dispatches each record exactly like a
-// TaskReminder.
-type AssignmentReminder struct {
-	AssignmentID    string
-	Title           string
-	Instructions    string
-	DueDate         string
-	RoomID          string
-	RoomName        string
-	MenteeID        string
-	MenteeName      string
-	MenteeEmail     string
-	MenteeLanguage  string
-}
-
 type RoomData struct {
-	Members     []Member
-	Reports     []Report
-	Tasks       []Task
-	Invites     []Invite
-	Classroom   ClassroomData
-	Stats       Stats
-	Leaderboard []LeaderboardEntry
-	MyPoints    int
-	MyRank      Rank
+	Members        []Member
+	Reports        []Report
+	Tasks          []Task
+	Invites        []Invite
+	Submissions    []Submission // mentor/teacher view: queue of submissions to review
+	PendingReviews int
+	Stats          Stats
+	Leaderboard    []LeaderboardEntry
+	MyPoints       int
+	MyRank         Rank
 }
 
 // CoachMetrics is the data behind /me/coaching. Pure read-model, computed
@@ -445,7 +458,7 @@ type AttentionItem struct {
 // <mark>...</mark> around the match terms. RoomMode is included so the
 // label can be "Teacher" vs "Mentor" without an extra round-trip.
 type SearchHit struct {
-	Kind         string // "report" | "comment" | "task" | "assignment" | "submission"
+	Kind         string // "report" | "comment" | "task" | "submission"
 	ID           string
 	RoomID       string
 	RoomName     string
