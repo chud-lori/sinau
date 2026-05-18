@@ -39,6 +39,72 @@ func (s *Store) RoomsFor(userID string) ([]domain.Room, error) {
 	return out, rows.Err()
 }
 
+// DashboardRooms is RoomsFor plus per-room counters used by the
+// dashboard list cards (mentee count, pending reviews, overdue, last
+// activity). Counters are role-aware: a mentor sees room-wide totals
+// (pending reviews across every student, overdue tasks anyone owes);
+// a mentee sees only their own slice.
+//
+// One round-trip — each counter is a correlated subquery in the same
+// SELECT. Cheap for the dashboard's typical N=few rooms; if this ever
+// scales past ~50 rooms per user, denormalise.
+func (s *Store) DashboardRooms(userID string) ([]domain.RoomCard, error) {
+	rows, err := s.db.Query(`SELECT r.id, r.name, r.mode, r.created_at, m.role, r.leaderboard_visible,
+		(SELECT COUNT(*) FROM memberships m2 WHERE m2.room_id = r.id AND m2.role = 'mentee') AS mentee_count,
+		(CASE WHEN m.role = 'mentor' THEN
+			(SELECT COUNT(*) FROM task_submissions sub
+				JOIN tasks t ON t.id = sub.task_id
+				WHERE t.room_id = r.id AND t.deleted_at = '' AND sub.status = 'submitted')
+		ELSE
+			(SELECT COUNT(*) FROM task_submissions sub
+				JOIN tasks t ON t.id = sub.task_id
+				WHERE t.room_id = r.id AND t.deleted_at = ''
+				  AND sub.student_id = m.user_id AND sub.status = 'submitted')
+		END) AS pending_reviews,
+		(CASE WHEN m.role = 'mentor' THEN
+			(SELECT COUNT(DISTINCT t.id) FROM tasks t
+				JOIN memberships ml ON ml.room_id = t.room_id AND ml.role = 'mentee'
+				  AND (t.assigned_to = '' OR t.assigned_to = ml.user_id)
+				LEFT JOIN task_submissions sub ON sub.task_id = t.id AND sub.student_id = ml.user_id
+				WHERE t.room_id = r.id AND t.deleted_at = ''
+				  AND t.due_date != '' AND t.due_date < date('now')
+				  AND (sub.id IS NULL OR sub.status != 'reviewed'))
+		ELSE
+			(SELECT COUNT(*) FROM tasks t
+				LEFT JOIN task_submissions sub ON sub.task_id = t.id AND sub.student_id = m.user_id
+				WHERE t.room_id = r.id AND t.deleted_at = ''
+				  AND (t.assigned_to = '' OR t.assigned_to = m.user_id)
+				  AND t.due_date != '' AND t.due_date < date('now')
+				  AND (sub.id IS NULL OR sub.status != 'reviewed'))
+		END) AS overdue_count,
+		COALESCE((SELECT MAX(ts) FROM (
+			SELECT created_at AS ts FROM reports WHERE room_id = r.id AND deleted_at = ''
+			UNION ALL
+			SELECT sub.submitted_at FROM task_submissions sub
+				JOIN tasks t ON t.id = sub.task_id
+				WHERE t.room_id = r.id AND t.deleted_at = ''
+		)), '') AS last_activity
+		FROM rooms r JOIN memberships m ON m.room_id = r.id
+		WHERE m.user_id = ?
+		ORDER BY r.created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.RoomCard
+	for rows.Next() {
+		var rc domain.RoomCard
+		var vis int
+		if err := rows.Scan(&rc.ID, &rc.Name, &rc.Mode, &rc.CreatedAt, &rc.Role, &vis,
+			&rc.MenteeCount, &rc.PendingReviews, &rc.OverdueTasks, &rc.LastActivity); err != nil {
+			return nil, err
+		}
+		rc.LeaderboardVisible = vis == 1
+		out = append(out, rc)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) CreateRoom(name, mentorID, mode string) (string, error) {
 	if !s.CanCreateRooms(mentorID) {
 		return "", errors.New("user cannot create rooms")

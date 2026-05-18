@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"time"
 
@@ -86,6 +87,64 @@ func (s *Store) JoinWithInvite(code, name, email, passwordHash string) (string, 
 		return "", "", errors.New("invite already used")
 	}
 	return uid, claim.RoomID, tx.Commit()
+}
+
+// AcceptInvite is JoinWithInvite for an already-registered user. It
+// validates the code, attaches the existing user to the room, and
+// marks the invite consumed — all in one transaction. Returns the
+// room ID so the caller can redirect.
+//
+// If the user is already a member of the room, returns the room ID
+// without consuming the invite (idempotent — clicking the link again
+// from inside the room is harmless). Returns sql.ErrNoRows when the
+// code doesn't resolve to a valid (un-expired, un-used) invite.
+func (s *Store) AcceptInvite(code, userID string) (string, error) {
+	claim, err := s.InviteClaim(code)
+	if err != nil {
+		return "", err
+	}
+
+	// Already a member? Don't burn the invite — let the caller send
+	// the user to the room as if the link "just worked." Checked
+	// before validity so a consumed link stays idempotent for the
+	// user who already redeemed it.
+	var existingRole string
+	switch err := s.db.QueryRow(`SELECT role FROM memberships WHERE room_id = ? AND user_id = ?`,
+		claim.RoomID, userID).Scan(&existingRole); err {
+	case nil:
+		return claim.RoomID, nil
+	case sql.ErrNoRows:
+		// proceed to join
+	default:
+		return "", err
+	}
+
+	if claim.UsedAt != "" || auth.ParseTime(claim.ExpiresAt).Before(time.Now().UTC()) {
+		return "", errors.New("invite invalid")
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	now := auth.Now()
+	if _, err := tx.Exec(`INSERT INTO memberships(room_id,user_id,role,created_at) VALUES(?,?,?,?)`,
+		claim.RoomID, userID, claim.Role, now); err != nil {
+		return "", err
+	}
+	res, err := tx.Exec(`UPDATE invites SET used_by = ?, used_at = ? WHERE code_hash = ? AND used_at IS NULL`,
+		userID, now, auth.HashToken(code))
+	if err != nil {
+		return "", err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return "", errors.New("invite already used")
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return claim.RoomID, nil
 }
 
 // Invites lists outstanding (and recently-used) invites for the room

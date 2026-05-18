@@ -45,6 +45,28 @@ type Room struct {
 	LeaderboardVisible bool
 }
 
+// RoomCard is the dashboard-list view of a room — the bare Room shape
+// plus a few denormalised counters so the room card can show why it's
+// worth opening (mentee count, pending review work, overdue tasks,
+// last-activity timestamp). All counts are role-aware:
+//
+//   - For a mentor viewer: PendingReviews = submitted-but-not-reviewed
+//     in the room; OverdueTasks = open tasks past deadline across all
+//     mentees.
+//   - For a mentee viewer: PendingReviews = their own awaiting-review
+//     submissions; OverdueTasks = their own past-deadline tasks.
+//
+// Other dashboard reads (RoomData, MentorDashboard summary) still use
+// the lean Room shape — these counters are only computed for the card
+// row, not every room query.
+type RoomCard struct {
+	Room
+	MenteeCount    int
+	PendingReviews int
+	OverdueTasks   int
+	LastActivity   string // empty when the room has no reports or submissions yet
+}
+
 // RoleLabel returns the user-facing label for a role within this room's
 // mode. Mentorship rooms use "Mentor" / "Mentee"; classroom rooms use
 // "Teacher" / "Student". Templates should never render raw role/mode
@@ -416,14 +438,14 @@ type GradeRoom struct {
 }
 
 type MentorDashboard struct {
-	Rooms          []Room
+	Rooms          []RoomCard
 	Summary        DashboardSummary
 	AttentionItems []AttentionItem
 	Mentees        []MenteeProgress
 }
 
 type MenteeDashboard struct {
-	Rooms         []Room
+	Rooms         []RoomCard
 	Summary       DashboardSummary
 	Tasks         []Task
 	RecentReports []Report

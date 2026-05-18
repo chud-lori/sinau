@@ -12,11 +12,12 @@ func init() {
 
 		// Nav (topbar)
 		"nav.help":     "Help",
-		"nav.login":    "Login",
-		"nav.join":     "Join",
-		"nav.setup":    "Set up",
-		"nav.settings": "Settings",
-		"nav.logout":   "Logout",
+		"nav.login":     "Login",
+		"nav.join":      "Join",
+		"nav.setup":     "Set up",
+		"nav.dashboard": "Dashboard",
+		"nav.settings":  "Settings",
+		"nav.logout":    "Logout",
 		"nav.language": "Language",
 		"nav.points":   "%d pts",
 		"nav.points.title": "lifetime points",
@@ -106,7 +107,7 @@ func init() {
 		"login.join_link":   "Join with an invite code",
 		"login.error":       "Invalid email or password.",
 
-		// Join
+		// Join (anonymous registration path)
 		"join.eyebrow":        "Invitation required",
 		"join.title":          "Join Room",
 		"join.preview.prefix": "You're about to create an account as a ",
@@ -117,10 +118,17 @@ func init() {
 		"join.submit":         "Create account",
 		"join.error.invalid":  "Use invite code, name, valid email, and password with at least 12 characters.",
 		"join.error.failed":   "Invite is invalid, used, expired, or the email is already registered.",
+		"join.already_have_account": "Already have an account?",
+		"join.login_link":     "Log in to join",
+		// Join confirmation (signed-in user clicks an invite link)
+		"join.confirm.eyebrow":  "You've been invited",
+		"join.confirm.title":    "Join this room?",
+		"join.confirm.subtitle": "Signed in as %s. Confirm to add this room to your dashboard.",
+		"join.confirm.submit":   "Join",
 
 		// Mentor dashboard
 		"mentor.eyebrow":     "Mentor command center",
-		"mentor.welcome":     "Welcome back, %s",
+		"mentor.welcome":     "Welcome, %s",
 		"mentor.subtitle":        "Start with blockers, overdue tasks, submissions awaiting review, and reports needing feedback.",
 		"mentor.create.eyebrow": "New room",
 		"mentor.create.title":   "Create a room",
@@ -176,6 +184,13 @@ func init() {
 		"mentee.reports.title":      "My reports",
 		"mentee.reports.empty.title": "No reports yet",
 		"mentee.reports.empty.body":  "Submit a progress report inside one of your rooms.",
+		// Mentee dashboard — Join with code panel (signed-in alternative
+		// to clicking an invite link).
+		"mentee.join.eyebrow":     "Got an invite code?",
+		"mentee.join.title":       "Join another room",
+		"mentee.join.help":        "Paste the code your mentor or teacher sent. We'll show what you're joining before adding it to your dashboard.",
+		"mentee.join.placeholder": "Invite code",
+		"mentee.join.submit":      "Continue",
 
 		// Room page
 		"room.back.all":           "All rooms",
@@ -187,6 +202,15 @@ func init() {
 		"room.open_resource":      "Open resource",
 		"room.open_submission":    "Open submission",
 		"room.review_report":      "Review report",
+		// Dashboard room cards (counters + last activity)
+		"room.card.mentees":       "%d mentees",
+		"room.card.pending":       "%d to review",
+		"room.card.awaiting":      "%d awaiting feedback",
+		"room.card.overdue":       "%d overdue",
+		"room.card.empty":         "No mentees yet",
+		"room.card.caught_up":     "All caught up",
+		"room.card.last_activity": "active %s",
+
 		// Hero ledes per (role, mode)
 		"room.subtitle.mentor.mentorship": "Review reports, unblock mentees, and assign the next concrete task.",
 		"room.subtitle.mentor.classroom":  "Publish assignments, review submissions, and keep the class on track.",
@@ -344,7 +368,9 @@ func init() {
 		// Invite created modal
 		"invite.created.code":   "Invite code:",
 		"invite.created.url":    "Join URL:",
-		"invite.created.copy":   "Copy",
+		"invite.created.copy":      "Copy",
+		"invite.created.copy_link": "Copy join link",
+		"invite.created.or_code":   "Or copy just the code",
 		"invite.created.copied": "Copied",
 
 		// Report detail page
@@ -463,9 +489,16 @@ func init() {
 		"title.report.edit":     "Edit report",
 		"title.task":            "Task detail",
 		"title.task.edit":       "Edit task",
-		"profile.eyebrow":       "Account",
-		"profile.title":         "Your account",
-		"profile.subtitle":      "Update how you appear in Sinau and where reminders are sent.",
+		"profile.eyebrow":          "Account",
+		// Per-section eyebrows. Each card on /profile gets a distinct
+		// label so the page reads as four sections, not four cards
+		// saying "ACCOUNT" in a row.
+		"profile.eyebrow.basics":   "Basics",
+		"profile.eyebrow.password": "Security",
+		"profile.eyebrow.sessions": "Devices",
+		"profile.eyebrow.views":    "Your stats",
+		"profile.title":            "Your account",
+		"profile.subtitle":         "Update how you appear in Sinau and where reminders are sent.",
 		"profile.section.basics":   "Profile",
 		"profile.section.password": "Password",
 		"profile.section.notif":    "Notifications",

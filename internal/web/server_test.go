@@ -168,7 +168,9 @@ func newClassroomHarness(t *testing.T) *classroomHarness {
 	if inviteRR.Code != http.StatusOK {
 		t.Fatalf("invite status = %d body=%s", inviteRR.Code, inviteRR.Body.String())
 	}
-	inviteCode := between(inviteRR.Body.String(), "<code>", "</code>")
+	// invite_created renders the full join URL first (most prominent); the
+	// bare code is in a <details> fallback. Extract from the URL query.
+	inviteCode := between(inviteRR.Body.String(), "?code=", "</code>")
 
 	// Mentee joins.
 	joinRR := post("/join", nil, url.Values{
@@ -540,7 +542,9 @@ func TestReportEditDelete(t *testing.T) {
 		t.Fatalf("invite: %d", inv.Code)
 	}
 	body := inv.Body.String()
-	codeStart := strings.Index(body, "<code>") + len("<code>")
+	// invite_created renders the full join URL first. Pull the code
+	// out of the URL's ?code= query parameter.
+	codeStart := strings.Index(body, "?code=") + len("?code=")
 	codeEnd := strings.Index(body[codeStart:], "</code>")
 	code := body[codeStart : codeStart+codeEnd]
 	// Mentee accepts via /join with a new account.
@@ -609,5 +613,88 @@ func TestReportEditDelete(t *testing.T) {
 	h.handler.ServeHTTP(rr3, getReq3)
 	if strings.Contains(rr3.Body.String(), prefix+rid) {
 		t.Fatal("deleted report still appears on room page")
+	}
+}
+
+// TestSignedInAcceptInvite covers the auto-join flow for an existing
+// account. The mentee already has a session from `newClassroomHarness`;
+// they click an invite to a brand-new room → the GET /join?code=…
+// renders the confirmation page (not the registration form), and the
+// POST /join/accept attaches them to the room without re-registering.
+func TestSignedInAcceptInvite(t *testing.T) {
+	h := newClassroomHarness(t)
+	// Mentor stands up a second room.
+	postRoom := h.post("/rooms", h.mentorCookies, url.Values{
+		"csrf": {h.mentorCSRF}, "name": {"R2"}, "mode": {"mentorship"},
+	})
+	if postRoom.Code != http.StatusSeeOther {
+		t.Fatalf("create second room: %d", postRoom.Code)
+	}
+	r2 := strings.TrimPrefix(postRoom.Result().Header.Get("Location"), "/rooms/")
+	// Mentor creates an invite for that second room.
+	inv := h.post("/rooms/"+r2+"/invites", h.mentorCookies, url.Values{
+		"csrf": {h.mentorCSRF}, "role": {"mentee"},
+	})
+	if inv.Code != http.StatusOK {
+		t.Fatalf("create invite: %d", inv.Code)
+	}
+	body := inv.Body.String()
+	codeStart := strings.Index(body, "?code=") + len("?code=")
+	codeEnd := strings.Index(body[codeStart:], "</code>")
+	code := body[codeStart : codeStart+codeEnd]
+
+	// GET /join?code=… as the signed-in mentee should render the
+	// confirmation page, not auto-join.
+	getReq := httptest.NewRequest(http.MethodGet, "/join?code="+code, nil)
+	for _, c := range h.menteeCookies {
+		getReq.AddCookie(c)
+	}
+	previewRR := httptest.NewRecorder()
+	h.handler.ServeHTTP(previewRR, getReq)
+	if previewRR.Code != http.StatusOK {
+		t.Fatalf("preview render: %d", previewRR.Code)
+	}
+	if !strings.Contains(previewRR.Body.String(), "/join/accept") {
+		t.Fatal("confirmation page should expose the /join/accept POST target")
+	}
+	// Membership should NOT exist yet — GET is read-only.
+	pre := httptest.NewRequest(http.MethodGet, "/rooms/"+r2, nil)
+	for _, c := range h.menteeCookies {
+		pre.AddCookie(c)
+	}
+	preRR := httptest.NewRecorder()
+	h.handler.ServeHTTP(preRR, pre)
+	if preRR.Code != http.StatusNotFound {
+		t.Fatalf("mentee should be 404 on the room before accepting; got %d", preRR.Code)
+	}
+
+	// POST /join/accept completes the join.
+	accept := h.post("/join/accept", h.menteeCookies, url.Values{
+		"csrf": {h.menteeCSRF}, "code": {code},
+	})
+	if accept.Code != http.StatusSeeOther {
+		t.Fatalf("accept: %d body=%s", accept.Code, accept.Body.String())
+	}
+	if loc := accept.Header().Get("Location"); loc != "/rooms/"+r2 {
+		t.Fatalf("accept redirect: want /rooms/%s, got %s", r2, loc)
+	}
+	// Membership now exists.
+	post := httptest.NewRequest(http.MethodGet, "/rooms/"+r2, nil)
+	for _, c := range h.menteeCookies {
+		post.AddCookie(c)
+	}
+	postRR := httptest.NewRecorder()
+	h.handler.ServeHTTP(postRR, post)
+	if postRR.Code != http.StatusOK {
+		t.Fatalf("mentee should be in the room after accepting; got %d", postRR.Code)
+	}
+
+	// Re-accepting the same code (already a member) should be
+	// idempotent: redirect, no error.
+	again := h.post("/join/accept", h.menteeCookies, url.Values{
+		"csrf": {h.menteeCSRF}, "code": {code},
+	})
+	if again.Code != http.StatusSeeOther {
+		t.Fatalf("re-accept idempotency broke: %d body=%s", again.Code, again.Body.String())
 	}
 }
